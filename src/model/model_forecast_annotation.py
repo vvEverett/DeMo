@@ -180,20 +180,23 @@ class ModelForecast(nn.Module):
 
         if isinstance(self, StreamModelForecast):
             if "memory_dict" in data and data["memory_dict"] is not None:
+                # Relative position [B,2]
                 rel_pos = data["origin"] - data["memory_dict"]["origin"]
+                # Relative angle [B,1]
                 rel_ang = (data["theta"] - data["memory_dict"]["theta"] + torch.pi) % (2 * torch.pi) - \
                 torch.pi
+                # Relative timestamp [B,1]
                 rel_ts = data["timestamp"] - data["memory_dict"]["timestamp"]
                 memory_pose = torch.cat([
                     rel_ts.unsqueeze(-1), rel_ang.unsqueeze(-1), rel_pos
                 ], dim=-1).float().to(x_encoder.device)
-                memory_x_encoder = data["memory_dict"]["x_encoder"]
-                memory_valid_mask = data["memory_dict"]["x_mask"]
+                memory_x_encoder = data["memory_dict"]["x_encoder"] # Historical Scene Context Features [B, N+M, C]
+                memory_valid_mask = data["memory_dict"]["x_mask"] # Historical Scene Elements Valid Mask [B, N+M]
             else:
-                memory_pose = x_encoder.new_zeros(x_encoder.size(0), self.pose_dim)
+                memory_pose = x_encoder.new_zeros(x_encoder.size(0), self.pose_dim) # [B, pose_dim] = [B, 4] All-zero tensor
                 memory_x_encoder = x_encoder
                 memory_valid_mask = key_valid_mask
-            cur_pose = torch.zeros_like(memory_pose)
+            cur_pose = torch.zeros_like(memory_pose) # Current Pose is All-zero [B, 4]
 
         if isinstance(self, StreamModelForecast) and self.use_stream_encoder:
             new_x_encoder = x_encoder
@@ -203,7 +206,7 @@ class ModelForecast(nn.Module):
             x_encoder = new_x_encoder * key_valid_mask.unsqueeze(-1) + \
             x_encoder * ~key_valid_mask.unsqueeze(-1)
 
-        #  intra-interaction learning for scene context features
+        #  intra-interaction learning for scene context features (Transformer encoder)
         for blk in self.blocks:
             x_encoder = blk(x_encoder, key_padding_mask=~key_valid_mask)
         x_encoder = self.norm(x_encoder)
@@ -223,7 +226,7 @@ class ModelForecast(nn.Module):
         time = time * 0.1 + 0.1
         time = time.unsqueeze(-1)
         mode = self.time_embedding_mlp(time)
-        mode = mode.repeat(x_encoder.size(0), 1, 1)
+        mode = mode.repeat(x_encoder.size(0), 1, 1) # [B, T, C]
 
         # decoder module with decoupled queries
         dense_predict, y_hat, pi, x_mode, new_y_hat, new_pi, mode_dense, scal, scal_new = \
@@ -238,24 +241,25 @@ class ModelForecast(nn.Module):
             rot_mat[:, 1, 1] = cos
 
             if "memory_dict" in data and data["memory_dict"] is not None:
-                memory_y_hat = data["memory_dict"]["glo_y_hat"]
-                memory_x_mode = data["memory_dict"]["x_mode"]
+                memory_y_hat = data["memory_dict"]["glo_y_hat"] # Historical Global Trajectory Predictions [B, K, T, 2]
+                memory_x_mode = data["memory_dict"]["x_mode"] # Historical Mode Query Features [B, K, C]
                 ori_idx = ((data["timestamp"] - data["memory_dict"]["timestamp"]) / 0.1).long() - 1
                 memory_traj_ori = torch.gather(memory_y_hat, 2, ori_idx.reshape(
                     B, 1, -1, 1).repeat(1, memory_y_hat.size(1), 1, memory_y_hat.size(-1)))
                 memory_y_hat = torch.bmm(
                     (memory_y_hat - memory_traj_ori).reshape(B, -1, 2).double(), rot_mat
-                ).reshape(B, memory_y_hat.size(1), -1, 2).to(torch.float32)
+                ).reshape(B, memory_y_hat.size(1), -1, 2).to(torch.float32) # Align historical trajectory to current coordinate system [B, K, T, 2]
                 
-                traj_embed = self.traj_embed(y_hat.detach().reshape(B, y_hat.size(1), -1))
-                memory_traj_embed = self.traj_embed(memory_y_hat.reshape(B, memory_y_hat.size(1), -1))
-                
+                traj_embed = self.traj_embed(y_hat.detach().reshape(B, y_hat.size(1), -1)) # Current Trajectory Embedding [B, K, C]
+                memory_traj_embed = self.traj_embed(memory_y_hat.reshape(B, memory_y_hat.size(1), -1)) # Historical Trajectory Embedding [B, K, C]
+                # cross attention between current and historical mode query features
                 for modfus in self.mode_fusion:
                     x_mode = modfus(x_mode, memory_x_mode, cur_pose, memory_pose,
                                     cur_pos_embed=traj_embed,
-                                    memory_pos_embed=memory_traj_embed)
-                y_hat_diff = self.stream_loc(x_mode).reshape(B, y_hat.size(1), -1, 2)
-                y_hat = y_hat + y_hat_diff
+                                    memory_pos_embed=memory_traj_embed) # [B, K, C]
+                # location refinement
+                y_hat_diff = self.stream_loc(x_mode).reshape(B, y_hat.size(1), -1, 2) # MLP [B, K, T, 2]
+                y_hat = y_hat + y_hat_diff  # final trajectory predictions after refinement [B, K, T, 2]
 
         ret_dict = {
             "y_hat": y_hat,  # trajectory output from mode query
@@ -302,6 +306,7 @@ class StreamModelForecast(ModelForecast):
         self.use_stream_decoder = use_stream_decoder
         self.embed_dim = kwargs["embed_dim"]
         self.pose_dim = 4
+        # Scene Context Stream - InteractionBlock include MLN and Context Referencing
         if self.use_stream_encoder:
             self.interaction = nn.ModuleList(
                 InteractionBlock(
@@ -314,6 +319,7 @@ class StreamModelForecast(ModelForecast):
                 )
                 for i in range(1)
             )
+        # Agent Trajectory Stream
         if self.use_stream_decoder:
             self.mode_fusion = nn.ModuleList(
                 InteractionBlock(
