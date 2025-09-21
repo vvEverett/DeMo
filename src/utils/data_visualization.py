@@ -24,7 +24,7 @@ DEFAULT_VIZ_CONFIG = {
     'dpi': 100,
     'agent_colors': ['red', 'blue', 'green', 'orange', 'purple', 'brown', 'pink', 'gray', 'olive', 'cyan'],
     'focal_agent_color': 'red',
-    'lane_color': 'lightblue',
+    'lane_color': 'blue',
     'lane_width': 2,
     'agent_size': 50,
     'trajectory_alpha': 0.7,
@@ -437,29 +437,29 @@ class EgoOtherVisualizer:
         # Plot ego trajectory with special styling
         ax.plot(positions[:, 0], positions[:, 1], 
                color=self.config['focal_agent_color'], 
-               linewidth=4, alpha=1.0, label=f"Ego (Agent {focal_idx})")
+               linewidth=2, alpha=1.0, label=f"Ego (Agent {focal_idx})")
         
         # Plot start and end points
         if len(positions) > 0:
-            # Start point (large green circle)
+            # Start point (medium green circle)
             ax.scatter(positions[0, 0], positions[0, 1], 
-                      c='green', s=150, marker='o', alpha=1.0,
+                      c='green', s=50, marker='o', alpha=1.0,
                       edgecolors='black', linewidths=2, label='Start')
             
-            # End point (large red triangle)
+            # End point (medium red triangle)
             ax.scatter(positions[-1, 0], positions[-1, 1], 
-                      c='red', s=150, marker='^', alpha=1.0,
+                      c='red', s=50, marker='^', alpha=1.0,
                       edgecolors='black', linewidths=2, label='End')
         
-        # Add ego agent ID
-        if show_agent_ids and len(positions) > 0:
-            mid_idx = len(positions) // 2
-            ax.annotate(f'EGO-{focal_idx}', 
-                       (positions[mid_idx, 0], positions[mid_idx, 1]),
-                       xytext=(10, 10), textcoords='offset points',
-                       fontsize=12, color=self.config['focal_agent_color'], 
-                       fontweight='bold', bbox=dict(boxstyle="round,pad=0.3", 
-                                                   facecolor='white', alpha=0.8))
+        # # Add ego agent ID
+        # if show_agent_ids and len(positions) > 0:
+        #     mid_idx = len(positions) // 2
+        #     ax.annotate(f'EGO-{focal_idx}', 
+        #                (positions[mid_idx, 0], positions[mid_idx, 1]),
+        #                xytext=(10, 10), textcoords='offset points',
+        #                fontsize=12, color=self.config['focal_agent_color'], 
+        #                fontweight='bold', bbox=dict(boxstyle="round,pad=0.3", 
+        #                                            facecolor='white', alpha=0.8))
         
         # Customize ego plot
         ax.set_xlabel('X Position (meters)')
@@ -469,15 +469,15 @@ class EgoOtherVisualizer:
         ax.axis('equal')
         ax.legend()
         
-        # Add ego statistics
-        avg_velocity = np.mean(ego_data['velocities']) if len(ego_data['velocities']) > 0 else 0
-        max_velocity = np.max(ego_data['velocities']) if len(ego_data['velocities']) > 0 else 0
-        trajectory_length = self._calculate_trajectory_length(positions)
+        # # Add ego statistics
+        # avg_velocity = np.mean(ego_data['velocities']) if len(ego_data['velocities']) > 0 else 0
+        # max_velocity = np.max(ego_data['velocities']) if len(ego_data['velocities']) > 0 else 0
+        # trajectory_length = self._calculate_trajectory_length(positions)
         
-        stats_text = f"Avg Speed: {avg_velocity:.1f} m/s\nMax Speed: {max_velocity:.1f} m/s\nDistance: {trajectory_length:.1f} m"
-        ax.text(0.02, 0.98, stats_text, transform=ax.transAxes, 
-               verticalalignment='top', fontsize=10,
-               bbox=dict(boxstyle="round,pad=0.3", facecolor='lightblue', alpha=0.8))
+        # stats_text = f"Avg Speed: {avg_velocity:.1f} m/s\nMax Speed: {max_velocity:.1f} m/s\nDistance: {trajectory_length:.1f} m"
+        # ax.text(0.02, 0.98, stats_text, transform=ax.transAxes, 
+        #        verticalalignment='top', fontsize=10,
+        #        bbox=dict(boxstyle="round,pad=0.3", facecolor='lightblue', alpha=0.8))
     
     def _plot_other_trajectories(self, ax, focal_idx: int, show_lanes: bool, show_agent_ids: bool):
         """Plot all other vehicles' trajectories."""
@@ -1106,28 +1106,33 @@ def create_integrated_ego_analysis(data_loader: DataLoader,
     if show_velocity and velocity_data is not None:
         fig = plt.figure(figsize=(20, 12))
         
-        # Create a 2x3 grid layout
-        gs = fig.add_gridspec(2, 3, height_ratios=[1, 1], width_ratios=[1, 1, 1])
+        # Create a more flexible grid layout
+        # Top row: 2 columns for trajectories
+        # Bottom row: 3 columns for analysis
+        gs = fig.add_gridspec(2, 6, height_ratios=[1, 1], width_ratios=[1, 1, 1, 1, 1, 1])
         
-        # Ego trajectory (top left)
-        ax_ego = fig.add_subplot(gs[0, 0])
-        # Other agents trajectory (top center)
-        ax_others = fig.add_subplot(gs[0, 1])
-        # Velocity profile (top right)
-        ax_velocity = fig.add_subplot(gs[0, 2])
-        # Trajectory path (bottom left, spanning 2 columns)
-        ax_path = fig.add_subplot(gs[1, :2])
-        # Acceleration profile (bottom right)
-        ax_accel = fig.add_subplot(gs[1, 2])
+        # Top row: Trajectories spanning full width
+        # Ego trajectory (spanning 3 columns)
+        ax_ego = fig.add_subplot(gs[0, :3])
+        # Other agents trajectory (spanning 3 columns)
+        ax_others = fig.add_subplot(gs[0, 3:])
         
-        # Plot ego and other trajectories
+        # Bottom row: Analysis plots (each spanning 2 columns for better proportions)
+        # Velocity profile
+        ax_velocity = fig.add_subplot(gs[1, :2])
+        # Trajectory path
+        ax_path = fig.add_subplot(gs[1, 2:4])
+        # Acceleration profile
+        ax_accel = fig.add_subplot(gs[1, 4:])
+        
+        # Plot ego and other trajectories (top row)
         ego_visualizer._plot_ego_trajectory(ax_ego, focal_idx, show_lanes, show_agent_ids)
-        ax_ego.set_title('Ego Vehicle Trajectory', fontweight='bold', fontsize=11)
+        ax_ego.set_title('Ego Vehicle Trajectory', fontweight='bold', fontsize=12)
         
         ego_visualizer._plot_other_trajectories(ax_others, focal_idx, show_lanes, show_agent_ids)
-        ax_others.set_title('Other Vehicles Trajectories', fontweight='bold', fontsize=11)
+        ax_others.set_title('Other Vehicles Trajectories', fontweight='bold', fontsize=12)
         
-        # Plot velocity analysis
+        # Plot velocity analysis (bottom row)
         time_seconds = velocity_data['time_seconds']
         velocities = velocity_data['velocities']
         accelerations = velocity_data['accelerations']
@@ -1153,9 +1158,9 @@ def create_integrated_ego_analysis(data_loader: DataLoader,
         
         # Trajectory path colored by velocity
         ax_path.plot(positions[:, 0], positions[:, 1], 'g-', linewidth=4, alpha=0.8)
-        ax_path.scatter(positions[0, 0], positions[0, 1], c='green', s=120, marker='o', 
+        ax_path.scatter(positions[0, 0], positions[0, 1], c='green', s=60, marker='o', 
                        edgecolors='black', linewidths=2, label='Start', zorder=5)
-        ax_path.scatter(positions[-1, 0], positions[-1, 1], c='red', s=120, marker='^', 
+        ax_path.scatter(positions[-1, 0], positions[-1, 1], c='red', s=60, marker='^', 
                        edgecolors='black', linewidths=2, label='End', zorder=5)
         
         # Color trajectory by velocity
@@ -1191,6 +1196,7 @@ def create_integrated_ego_analysis(data_loader: DataLoader,
             ax_accel.set_ylabel('Acceleration (m/s²)', fontsize=10)
             ax_accel.set_title('Ego Acceleration Profile', fontweight='bold', fontsize=11)
             ax_accel.grid(True, alpha=0.3)
+            ax_accel.legend()
             
             # Add acceleration statistics
             acceleration_stats = velocity_data['acceleration_stats']
