@@ -110,8 +110,8 @@ class ModelForecast(nn.Module):
     def forward(self, data):
         ###### Scene context encoding ###### 
         # agent encoding
-        hist_valid_mask = data["x_valid_mask"]
-        hist_key_valid_mask = data["x_key_valid_mask"]
+        hist_valid_mask = data["x_valid_mask"] # [B, N, L]
+        hist_key_valid_mask = data["x_key_valid_mask"] # [B, N]
         hist_feat = torch.cat(
             [
                 data["x_positions_diff"], # (B, N, L, 2)  x_positions_diff: torch.Size([16, 48, 50, 2])
@@ -122,7 +122,7 @@ class ModelForecast(nn.Module):
         ) # (B, N, L, D) = (batch_size, num_agents, hist_length, feature_dim) = [16, 48, 50, 4]
 
         B, N, L, D = hist_feat.shape
-        hist_feat = hist_feat.view(B * N, L, D)
+        hist_feat = hist_feat.view(B * N, L, D) # [B*N, L, D] = [16*48, 50, 4]
         hist_feat_key_valid = hist_key_valid_mask.view(B * N)
 
         # unidirectional mamba (For agent history encoding)
@@ -146,7 +146,7 @@ class ModelForecast(nn.Module):
             B * N, actor_feat.shape[-1], device=actor_feat.device
         )
         actor_feat_tmp[hist_feat_key_valid] = actor_feat
-        actor_feat = actor_feat_tmp.view(B, N, actor_feat.shape[-1])
+        actor_feat = actor_feat_tmp.view(B, N, actor_feat.shape[-1]) # [B, N, C]
 
         # map encoding (Using PointNet)
         lane_valid_mask = data["lane_valid_mask"]
@@ -156,7 +156,7 @@ class ModelForecast(nn.Module):
         )
         B, M, L, D = lane_normalized.shape
         lane_feat = self.lane_embed(lane_normalized.view(-1, L, D).contiguous())
-        lane_feat = lane_feat.view(B, M, -1)
+        lane_feat = lane_feat.view(B, M, -1) # [B, M, C]
 
         # type embedding and position embedding
         x_centers = torch.cat([data["x_centers"], data["lane_centers"]], dim=1)
@@ -165,16 +165,16 @@ class ModelForecast(nn.Module):
         pos_feat = torch.cat([x_centers, x_angles], dim=-1)
         pos_embed = self.pos_embed(pos_feat)
 
-        actor_type_embed = self.actor_type_embed[data["x_attr"][..., 2].long()]
-        lane_type_embed = self.lane_type_embed[data["lane_attr"][..., 0].long()]
+        actor_type_embed = self.actor_type_embed[data["x_attr"][..., 2].long()] # [B, N, C]
+        lane_type_embed = self.lane_type_embed[data["lane_attr"][..., 0].long()] # [B, M, C]
         actor_feat += actor_type_embed
         lane_feat += lane_type_embed
 
         # scene context features
-        x_encoder = torch.cat([actor_feat, lane_feat], dim=1)
+        x_encoder = torch.cat([actor_feat, lane_feat], dim=1) # [B, N+M, C]
         key_valid_mask = torch.cat(
             [data["x_key_valid_mask"], data["lane_key_valid_mask"]], dim=1
-        )
+        ) # [B, N+M]
 
         x_encoder = x_encoder + pos_embed
 

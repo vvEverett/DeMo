@@ -191,9 +191,9 @@ class TimeDecoder(nn.Module):
         mode_tmp = mode
         
         # Directional intention localization
-        multi_modal_query = self.multi_modal_query_embedding(self.modal)
-        mode_query = encoding[:, 0]
-        mode = mode_query[:, None] + multi_modal_query
+        multi_modal_query = self.multi_modal_query_embedding(self.modal) # [K, C]
+        mode_query = encoding[:, 0] # [B, C]
+        mode = mode_query[:, None] + multi_modal_query # [B, K, C]
 
         for blk in self.cross_block_mode:
             mode = blk(mode, encoding, key_padding_mask=mask)
