@@ -12,34 +12,35 @@ except ImportError:
 
 
 
-class GMMPredictor(nn.Module):
+class MLPPredictor(nn.Module):
     def __init__(self, future_len=60, dim=128):
-        super(GMMPredictor, self).__init__()
+        super(MLPPredictor, self).__init__()
         self._future_len = future_len
-        self.gaussian = nn.Sequential(
+        # Trajectory prediction MLP
+        self.trajectory_head = nn.Sequential(
             nn.Linear(dim, 256), 
             nn.GELU(), 
+            nn.Linear(256, 256),
+            nn.GELU(),
             nn.Linear(256, self._future_len*2)
         )
-        self.score = nn.Sequential(
-            nn.Linear(dim, 64), 
+        # Confidence score MLP
+        self.score_head = nn.Sequential(
+            nn.Linear(dim, 128), 
             nn.GELU(), 
+            nn.Linear(128, 64),
+            nn.GELU(),
             nn.Linear(64, 1),
-        )
-        self.scale = nn.Sequential(
-            nn.Linear(dim, 256), 
-            nn.GELU(), 
-            nn.Linear(256, self._future_len*2)
         )
     
     def forward(self, input):
         B, M, _ = input.shape
-        res = self.gaussian(input).view(B, M, self._future_len, 2) 
-        scal = F.elu_(self.scale(input), alpha=1.0) + 1.0 + 0.0001
-        scal = scal.view(B, M, self._future_len, 2) 
-        score = self.score(input).squeeze(-1)
-
-        return res, score, scal
+        # Predict trajectories [B, M, T, 2]
+        trajectories = self.trajectory_head(input).view(B, M, self._future_len, 2) 
+        # Predict confidence scores [B, M]
+        scores = self.score_head(input).squeeze(-1)
+        
+        return trajectories, scores
     
 
 class TimeDecoder(nn.Module):
@@ -64,7 +65,7 @@ class TimeDecoder(nn.Module):
         self.register_buffer('modal', torch.arange(6).long())
 
         # MLP for mode query
-        self.predictor = GMMPredictor(future_len)
+        self.predictor = MLPPredictor(future_len)
 
     def forward(self, mode, encoding, mask=None):
         # Directional intention localization (Mode Localization Module only)
@@ -77,6 +78,6 @@ class TimeDecoder(nn.Module):
         for blk in self.self_block_mode:
             mode = blk(mode)
 
-        y_hat, pi, scal = self.predictor(mode)
+        y_hat, pi = self.predictor(mode)
 
-        return y_hat, pi, scal
+        return y_hat, pi

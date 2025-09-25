@@ -101,7 +101,41 @@ class ModelForecast(nn.Module):
         state_dict = {
             k[len("net.") :]: v for k, v in ckpt.items() if k.startswith("net.")
         }
-        return self.load_state_dict(state_dict=state_dict, strict=False)
+        
+        # Filter out parameters from removed modules (State Consistency and Hybrid query)
+        filtered_state_dict = {}
+        removed_keys = []
+        
+        for k, v in state_dict.items():
+            # Skip State Consistency Module parameters
+            if any(x in k for x in ['time_embedding_mlp', 'timequery_embed_mamba', 'timequery_norm_f', 
+                                   'timequery_drop_path', 'dense_predict', 'cross_block_time']):
+                removed_keys.append(k)
+                continue
+            # Skip Hybrid query parameters  
+            if any(x in k for x in ['self_block_dense', 'cross_block_dense', 'self_block_different_mode',
+                                   'dense_embed_mamba', 'dense_norm_f', 'dense_drop_path', 'predictor_dense']):
+                removed_keys.append(k)
+                continue
+            # Keep other parameters
+            filtered_state_dict[k] = v
+        
+        print(f"Loading checkpoint from {ckpt_path}")
+        print(f"Removed {len(removed_keys)} parameters from removed modules:")
+        for key in removed_keys[:10]:  # Print first 10 removed keys
+            print(f"  - {key}")
+        if len(removed_keys) > 10:
+            print(f"  ... and {len(removed_keys) - 10} more")
+        
+        missing_keys, unexpected_keys = self.load_state_dict(state_dict=filtered_state_dict, strict=False)
+        
+        if missing_keys:
+            print(f"Missing keys (newly initialized): {missing_keys}")
+        if unexpected_keys:
+            print(f"Unexpected keys (ignored): {unexpected_keys}")
+            
+        print('Pretrained weights have been loaded (Mode Localization Module only).')
+        return self
 
     def forward(self, data):
         ###### Scene context encoding ###### 
@@ -185,12 +219,11 @@ class ModelForecast(nn.Module):
         y_hat_others = self.dense_predictor(x_others).view(B, x_others.size(1), -1, 2)
 
         # decoder module with Mode Localization Module only
-        y_hat, pi, scal = self.time_decoder(None, x_encoder, mask=~key_valid_mask)
+        y_hat, pi = self.time_decoder(None, x_encoder, mask=~key_valid_mask)
 
         ret_dict = {
             "y_hat": y_hat,  # trajectory output from Mode Localization Module
             "pi": pi,  # probability output from Mode Localization Module
-            "scal": scal,  # output for Laplace loss from Mode Localization Module
 
             "y_hat_others": y_hat_others,  # trajectory of other agents
 
@@ -198,6 +231,7 @@ class ModelForecast(nn.Module):
             "dense_predict": None,  
             "new_y_hat": None,  
             "new_pi": None,     
+            "scal": None,  # No scale output for MLP predictor
             "scal_new": None,  
         }
 

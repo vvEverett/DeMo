@@ -1,0 +1,36 @@
+defaults:
+  - datamodule: av2
+  - model: model_forecast_moe  # Use MLP predictor version
+
+hydra:
+  run:
+    dir: outputs/${output}/${now:%Y%m%d-%H%M%S}
+
+seed: 2024
+monitor: val_minFDE6
+save_top_k: 10
+
+data_root:
+checkpoint:  # Leave empty for training from scratch
+pretrained_weights:  # Leave empty for training from scratch
+output: train_mlp_${datamodule.name}_${datamodule.phase}_${model.name}_${model.phase}
+
+# trainer
+num_workers: 4
+gpus: 8  # Use 8 GPUs for training
+sync_bn: true
+batch_size: 16
+epochs: 60
+warmup_epochs: 10
+
+# optimizer
+lr: 0.003  
+weight_decay: 1e-2  
+gradient_clip_val: 5
+gradient_clip_algorithm: norm
+
+limit_train_batches:
+limit_val_batches:
+limit_test_batches:
+log_model: all
+test: false

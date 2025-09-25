@@ -125,13 +125,12 @@ class Trainer(pl.LightningModule):
         return predictions, probs
 
     def cal_loss(self, out, data, tag=''):
-        """Calculate simplified loss for trajectory prediction with Mode Localization Module only.
+        """Calculate simplified loss for trajectory prediction with MLP predictor.
 
         Computes loss components:
         - Regression loss for trajectory predictions from Mode Localization Module
-        - Classification loss for mode selection
+        - Classification loss for mode selection  
         - Loss for other agents in the scene
-        - Laplace NLL loss for uncertainty estimation
 
         Args:
             out: Model outputs containing predictions and auxiliary information
@@ -142,12 +141,11 @@ class Trainer(pl.LightningModule):
             Tuple of (total_loss, loss_dict) for logging
         """
         y_hat, pi, y_hat_others = out["y_hat"], out["pi"], out["y_hat_others"]
-        scal = out["scal"]
 
         # gt
         y, y_others = data["target"][:, 0], data["target"][:, 1:]
 
-        # loss for output of Mode Localization Module
+        # loss for output of Mode Localization Module (MLP predictor)
         l2_norm = torch.norm(y_hat[..., :2] - y.unsqueeze(1), dim=-1).sum(dim=-1)
         best_mode = torch.argmin(l2_norm, dim=-1)
         y_hat_best = y_hat[torch.arange(y_hat.shape[0]), best_mode]
@@ -160,22 +158,14 @@ class Trainer(pl.LightningModule):
             y_hat_others[others_reg_mask], y_others[others_reg_mask]
         )
 
-        # Laplace loss for Mode Localization Module output
-        predictions = {}
-        predictions['traj'] = y_hat
-        predictions['scale'] = scal
-        predictions['probs'] = pi
-        laplace_loss = self.laplace_loss.compute(predictions, y)
-
-        # total loss (simplified)
-        loss = agent_reg_loss + agent_cls_loss + others_reg_loss + laplace_loss
+        # total loss (no Laplace loss for MLP predictor)
+        loss = agent_reg_loss + agent_cls_loss + others_reg_loss
 
         disp_dict = {
             f"{tag}loss": loss.item(),
             f"{tag}reg_loss": agent_reg_loss.item(),
             f"{tag}cls_loss": agent_cls_loss.item(),
             f"{tag}others_reg_loss": others_reg_loss.item(),
-            f"{tag}laplace_loss": laplace_loss.item(),
         }
 
         return loss, disp_dict
