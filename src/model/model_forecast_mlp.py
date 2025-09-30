@@ -4,7 +4,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from .layers.lane_embedding import LaneEmbeddingLayer
 from .layers.transformer_blocks import Block, InteractionBlock
-from .layers.time_decoder_moe import TimeDecoder
+from .layers.time_decoder_mlp import TimeDecoder
 from .layers.mamba.vim_mamba import init_weights, create_block
 from functools import partial
 from timm.models.layers import DropPath, to_2tuple

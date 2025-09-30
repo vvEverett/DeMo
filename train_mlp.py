@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """
 Training script for the MLP predictor model.
+Replace GMM with MLP in the original script.
+Use as a baseline.
 """
 import os
 import sys
@@ -17,7 +19,7 @@ from pytorch_lightning.callbacks import (
 from pytorch_lightning.loggers import TensorBoardLogger
 
 
-@hydra.main(version_base=None, config_path="conf", config_name="config_mlp_train")
+@hydra.main(version_base=None, config_path="conf", config_name="config_mlp")
 def main(conf):
     pl.seed_everything(conf.seed, workers=True)
     output_dir = HydraConfig.get().runtime.output_dir

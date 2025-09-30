@@ -2,7 +2,7 @@ name: mlp_predictor
 phase: default
 
 target:
-  _target_: src.model.trainer_forecast_moe.Trainer
+  _target_: src.model.trainer_forecast_mlp.Trainer
   model:
     type: 'ModelForecast'
     embed_dim: 128

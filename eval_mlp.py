@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Evaluation script using the modified MOE structure.
+Evaluation script using the MLP predictor structure.
 """
 import os
 import sys
@@ -9,7 +9,7 @@ from hydra.core.hydra_config import HydraConfig
 import pytorch_lightning as pl
 from hydra.utils import instantiate, to_absolute_path
 
-@hydra.main(version_base=None, config_path="./conf/", config_name="config_moe")
+@hydra.main(version_base=None, config_path="./conf/", config_name="config_mlp")
 def main(conf):
     pl.seed_everything(conf.seed)
     output_dir = HydraConfig.get().runtime.output_dir

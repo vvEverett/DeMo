@@ -1,6 +1,6 @@
 defaults:
   - datamodule: av2
-  - model: model_forecast_moe  # Use MLP predictor version
+  - model: model_forecast_mlp  # Use MLP predictor to replace GMM predictor as baseline
 
 hydra:
   run:
@@ -13,18 +13,18 @@ save_top_k: 10
 data_root:
 checkpoint:  # Leave empty for training from scratch
 pretrained_weights:  # Leave empty for training from scratch
-output: train_mlp_${datamodule.name}_${datamodule.phase}_${model.name}_${model.phase}
+output: baseline_mlp_${datamodule.name}_${datamodule.phase}_${model.name}_${model.phase}
 
 # trainer
 num_workers: 4
-gpus: 8  # Use 8 GPUs for training
+gpus: 6  # Use 6 GPUs for training
 sync_bn: true
 batch_size: 16
 epochs: 60
 warmup_epochs: 10
 
 # optimizer
-lr: 0.003  
+lr: 0.00225 # Learning rate originally 0.003 for 8 GPUs, scaled down for 6 GPUs
 weight_decay: 1e-2  
 gradient_clip_val: 5
 gradient_clip_algorithm: norm
