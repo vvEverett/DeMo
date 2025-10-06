@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 """
-Training script for the MLP predictor model.
-Replace GMM with MLP in the original script.
-Use as a baseline.
+Training script for the MoE (Mixture of Experts) predictor model.
+Replace GMM with MoE in the original script.
 """
 import os
 import sys
@@ -17,10 +16,20 @@ from pytorch_lightning.callbacks import (
     RichProgressBar,
 )
 from pytorch_lightning.loggers import TensorBoardLogger, WandbLogger
+from pytorch_lightning.strategies import DDPStrategy
 
 
-@hydra.main(version_base=None, config_path="conf", config_name="config_mlp")
+@hydra.main(version_base=None, config_path="conf", config_name="config_moe")
 def main(conf):
+    """
+    Main training script for DeMo with Mixture of Experts (MoE).
+    
+    Features:
+    - 6 specialized experts for diverse driving patterns
+    - Top-2 expert activation with sparse gating
+    - MLP router for context-aware expert selection
+    - Load balancing and diversity losses for unsupervised expert specialization
+    """
     pl.seed_everything(conf.seed, workers=True)
     output_dir = HydraConfig.get().runtime.output_dir
 
@@ -29,10 +38,10 @@ def main(conf):
     
     # Configure wandb logger
     wandb_logger = WandbLogger(
-        project=conf.get('wandb_project', 'DeMo-MLP'),
+        project=conf.get('wandb_project', 'DeMo'),
         name=conf.get('wandb_run_name', None),
         save_dir=output_dir,
-        log_model=False,
+        log_model=False,  # Set to True if you want to save models to wandb
     )
     
     # Use both loggers
@@ -52,8 +61,9 @@ def main(conf):
         LearningRateMonitor(logging_interval="epoch"),
     ]
 
-    # Use auto strategy for single GPU or ddp_find_unused_parameters_true for multi-GPU
-    strategy = "auto" if conf.gpus == 1 else "ddp_find_unused_parameters_true"
+    # For MoE models, we need to set find_unused_parameters=True in DDPStrategy
+    # because not all experts are used in every forward pass (only top-k are activated)
+    strategy = "auto" if conf.gpus == 1 else DDPStrategy(find_unused_parameters=True)
     
     trainer = pl.Trainer(
         logger=logger,
@@ -70,6 +80,8 @@ def main(conf):
     )
 
     model = instantiate(conf.model.target)
+    
+    # Backup configuration and source code
     os.system('cp -a %s %s' % ('conf', output_dir))
     os.system('cp -a %s %s' % ('src', output_dir))
     
@@ -79,15 +91,38 @@ def main(conf):
         print(model)  
         sys.stdout = original_stdout
     
+    # Print MoE-specific information
     print("="*80)
-    print("TRAINING MLP PREDICTOR MODEL")
+    print("TRAINING MOE PREDICTOR MODEL")
     print("="*80)
-    print(f"Model: Mode Localization Module with MLP Predictor")
+    print(f"Model: Mode Localization Module with MoE Predictor")
     print(f"Output directory: {output_dir}")
     print(f"Epochs: {conf.epochs}")
     print(f"Learning rate: {conf.lr}")
     print(f"Batch size: {conf.batch_size}")
     print(f"GPUs: {conf.gpus}")
+    
+    # Print MoE architecture details
+    try:
+        print(f"\n--- MoE Architecture ---")
+        print(f"Number of experts: {model.net.time_decoder.predictor.num_experts}")
+        print(f"Top-K activation: {model.net.time_decoder.predictor.top_k}")
+        print(f"Embedding dimension: {conf.model.target.model.embed_dim}")
+        print(f"Future steps: {conf.model.target.model.future_steps}")
+        
+        # Count parameters
+        total_params = sum(p.numel() for p in model.parameters())
+        trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+        expert_params = sum(p.numel() for p in model.net.time_decoder.predictor.experts.parameters())
+        router_params = sum(p.numel() for p in model.net.time_decoder.predictor.router.parameters())
+        
+        print(f"\nTotal parameters: {total_params:,}")
+        print(f"Trainable parameters: {trainable_params:,}")
+        print(f"Expert parameters: {expert_params:,}")
+        print(f"Router parameters: {router_params:,}")
+    except Exception as e:
+        print(f"Could not extract MoE architecture details: {e}")
+    
     print("="*80)
     
     datamodule = instantiate(conf.datamodule.target)

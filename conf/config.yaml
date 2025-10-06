@@ -14,6 +14,10 @@ seed: 2024
 monitor: val_minFDE6
 save_top_k: 10
 
+# Weights & Biases configuration
+wandb_project: DeMo  # Your W&B project name
+wandb_run_name:  # Optional: custom run name (auto-generated if not set)
+
 data_root:
 checkpoint:
 pretrained_weights:

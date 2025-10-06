@@ -1,0 +1,22 @@
+name: moe_predictor
+phase: default
+
+target:
+  _target_: src.model.trainer_forecast_moe.Trainer
+  model:
+    type: 'ModelForecast'
+    embed_dim: 128
+    future_steps: 60
+    num_heads: 8
+    mlp_ratio: 4.0
+    qkv_bias: False
+    drop_path: 0.2
+    num_experts: 6  # 6 specialized experts
+    top_k: 2  # Top-2 expert activation
+  pretrained_weights: ${pretrained_weights}
+  lr: ${lr}
+  weight_decay: ${weight_decay}
+  epochs: ${epochs}
+  warmup_epochs: ${warmup_epochs}
+  aux_loss_weight: 0.01  # Weight for load balancing loss
+  diversity_loss_weight: 0.1  # Weight for expert diversity loss

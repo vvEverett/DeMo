@@ -1,6 +1,6 @@
 defaults:
   - datamodule: av2
-  - model: model_forecast_mlp  # Use MLP predictor to replace GMM predictor as baseline
+  - model: model_forecast_moe  # Use MoE predictor with 6 experts
 
 hydra:
   run:
@@ -11,13 +11,13 @@ monitor: val_minFDE6
 save_top_k: 10
 
 # Weights & Biases configuration
-wandb_project: DeMo-MLP  # Your W&B project name
+wandb_project: DeMo  # Your W&B project name
 wandb_run_name:  # Optional: custom run name (auto-generated if not set)
 
 data_root:
 checkpoint:  # Leave empty for training from scratch
-pretrained_weights:  # Leave empty for training from scratch
-output: baseline_mlp_${datamodule.name}_${datamodule.phase}_${model.name}_${model.phase}
+pretrained_weights:  # Path to MLP baseline checkpoint to initialize encoder (optional)
+output: train_moe_${datamodule.name}_${datamodule.phase}_${model.name}_${model.phase}
 
 # trainer
 num_workers: 4
@@ -28,10 +28,14 @@ epochs: 60
 warmup_epochs: 10
 
 # optimizer
-lr: 0.00225 # Learning rate originally 0.003 for 8 GPUs, scaled down for 6 GPUs
+lr: 0.00225  # Learning rate scaled for 6 GPUs
 weight_decay: 1e-2  
 gradient_clip_val: 5
 gradient_clip_algorithm: norm
+
+# MoE-specific hyperparameters to prevent expert collapse
+aux_loss_weight: 0.8  # Increased from 0.01 for stronger load balancing
+diversity_loss_weight: 0.8  # Increased from 0.1 for better expert specialization
 
 limit_train_batches:
 limit_val_batches:
