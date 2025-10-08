@@ -69,6 +69,79 @@ class DataSelector:
         print(f"Selected file {index} from {split}: {file_path.name}")
         return file_path
     
+    def select_file_by_name(self, filename: str, split: str = None) -> Optional[Path]:
+        """Select a file by filename (with or without .pt extension)."""
+        if split is None:
+            split = self.current_split
+            
+        if split not in self.all_files:
+            print(f"Split {split} not available!")
+            return None
+        
+        # Add .pt extension if not present
+        if not filename.endswith('.pt'):
+            filename = filename + '.pt'
+        
+        files = self.all_files[split]
+        for file_path in files:
+            if file_path.name == filename:
+                print(f"Selected file from {split}: {file_path.name}")
+                return file_path
+        
+        print(f"File '{filename}' not found in {split} split!")
+        print(f"Use list_files('{split}') to see available files.")
+        return None
+    
+    def get_file_index(self, filename: str, split: str = None) -> Optional[int]:
+        """Get the index of a file by its filename."""
+        if split is None:
+            split = self.current_split
+            
+        if split not in self.all_files:
+            print(f"Split {split} not available!")
+            return None
+        
+        # Add .pt extension if not present
+        if not filename.endswith('.pt'):
+            filename = filename + '.pt'
+        
+        files = self.all_files[split]
+        for i, file_path in enumerate(files):
+            if file_path.name == filename:
+                return i
+        
+        return None
+    
+    def select_next_file(self, split: str = None) -> Optional[Path]:
+        """Select the next file in sequence."""
+        if split is None:
+            split = self.current_split
+            
+        if split not in self.all_files or len(self.all_files[split]) == 0:
+            print(f"No files available for split: {split}")
+            return None
+        
+        files = self.all_files[split]
+        self.current_file_idx = (self.current_file_idx + 1) % len(files)
+        file_path = files[self.current_file_idx]
+        print(f"Selected file {self.current_file_idx}/{len(files)-1} from {split}: {file_path.name}")
+        return file_path
+    
+    def select_previous_file(self, split: str = None) -> Optional[Path]:
+        """Select the previous file in sequence."""
+        if split is None:
+            split = self.current_split
+            
+        if split not in self.all_files or len(self.all_files[split]) == 0:
+            print(f"No files available for split: {split}")
+            return None
+        
+        files = self.all_files[split]
+        self.current_file_idx = (self.current_file_idx - 1) % len(files)
+        file_path = files[self.current_file_idx]
+        print(f"Selected file {self.current_file_idx}/{len(files)-1} from {split}: {file_path.name}")
+        return file_path
+    
     def list_files(self, split: str, max_files: int = 10):
         """List available files for a split."""
         if split not in self.all_files:
@@ -790,97 +863,6 @@ def explore_scenario(data_selector: DataSelector,
         show_agent_ids=True,
         specific_agents=specific_agents
     )
-
-
-def visualize_ego_vs_others(data_selector: DataSelector,
-                           data_loader: DataLoader,
-                           ego_visualizer: EgoOtherVisualizer,
-                           split: str = 'train', 
-                           scenario_index: Optional[int] = None,
-                           show_lanes: bool = True,
-                           show_agent_ids: bool = True,
-                           show_velocity: bool = False,
-                           velocity_analysis_mode: str = 'integrated'):
-    """
-    Convenient function to quickly visualize ego vs. other vehicles with optional velocity analysis.
-    
-    Parameters:
-    - data_selector: DataSelector instance
-    - data_loader: DataLoader instance
-    - ego_visualizer: EgoOtherVisualizer instance
-    - split: Data split to use ('train', 'val', 'test')
-    - scenario_index: Specific scenario index (None for random)
-    - show_lanes: Whether to show lane information
-    - show_agent_ids: Whether to show agent ID labels
-    - show_velocity: Whether to include velocity analysis
-    - velocity_analysis_mode: 'integrated' for combined view, 'separate' for separate plots
-    """
-    
-    # Select scenario
-    if scenario_index is None:
-        file_path = data_selector.select_random_file(split)
-    else:
-        file_path = data_selector.select_file_by_index(split, scenario_index)
-    
-    if file_path is None:
-        return
-    
-    # Load data
-    data_loader.load_scenario(file_path)
-    
-    # Print scenario summary
-    print(f"=== Ego vs. Others Visualization - {split.upper()} Split ===")
-    data_loader.print_summary()
-    print()
-    
-    # Create visualization based on mode
-    if show_velocity:
-        if velocity_analysis_mode == 'integrated':
-            create_integrated_ego_analysis(data_loader, ego_visualizer, 
-                                          show_lanes, show_agent_ids, show_velocity=True)
-        elif velocity_analysis_mode == 'separate':
-            # First show ego vs others
-            ego_visualizer.plot_ego_vs_others(
-                show_lanes=show_lanes,
-                show_agent_ids=show_agent_ids
-            )
-            
-            # Then show velocity analysis
-            print("\n=== Velocity Analysis ===")
-            velocity_data = plot_ego_velocity_analysis(data_loader, show_acceleration=True)
-            if velocity_data is not None:
-                create_velocity_plots(velocity_data)
-                
-                # Print summary statistics
-                print("\n=== Ego Agent Motion Analysis Summary ===")
-                metadata = velocity_data['metadata']
-                print(f"Scenario ID: {metadata['scenario_id']}")
-                print(f"City: {metadata['city']}")
-                print(f"Ego Agent Index: {metadata['focal_agent_idx']}")
-                print(f"Duration: {len(velocity_data['timesteps'])} timesteps ({len(velocity_data['timesteps']) * 0.1:.1f} seconds)")
-                
-                velocity_stats = velocity_data['velocity_stats']
-                if velocity_stats:
-                    print(f"\nVelocity Statistics:")
-                    print(f"  Average: {velocity_stats['mean']:.2f} m/s ({velocity_stats['mean'] * 3.6:.1f} km/h)")
-                    print(f"  Maximum: {velocity_stats['max']:.2f} m/s ({velocity_stats['max'] * 3.6:.1f} km/h)")
-                    print(f"  Minimum: {velocity_stats['min']:.2f} m/s ({velocity_stats['min'] * 3.6:.1f} km/h)")
-                    print(f"  Standard Deviation: {velocity_stats['std']:.2f} m/s")
-                
-                acceleration_stats = velocity_data['acceleration_stats']
-                if acceleration_stats:
-                    print(f"\nAcceleration Statistics:")
-                    print(f"  Average: {acceleration_stats['mean']:.2f} m/s²")
-                    print(f"  Maximum: {acceleration_stats['max']:.2f} m/s²")
-                    print(f"  Minimum: {acceleration_stats['min']:.2f} m/s²")
-                    print(f"  Standard Deviation: {acceleration_stats['std']:.2f} m/s²")
-    else:
-        # Standard ego vs others visualization
-        ego_visualizer.plot_ego_vs_others(
-            show_lanes=show_lanes,
-            show_agent_ids=show_agent_ids
-        )
-
 
 # === NEW VELOCITY ANALYSIS FUNCTIONS ===
 
