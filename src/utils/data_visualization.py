@@ -506,6 +506,7 @@ class EgoOtherVisualizer:
             return
         
         positions = ego_data['positions']
+        timesteps = ego_data['timesteps']
         
         # Plot ego trajectory with special styling
         ax.plot(positions[:, 0], positions[:, 1], 
@@ -523,6 +524,14 @@ class EgoOtherVisualizer:
             ax.scatter(positions[-1, 0], positions[-1, 1], 
                       c='red', s=50, marker='^', alpha=1.0,
                       edgecolors='black', linewidths=2, label='End')
+            
+            # Mark position at t=5s (timestep 50, assuming 0.1s per step)
+            time_seconds = timesteps * 0.1
+            if len(time_seconds) > 0 and np.max(time_seconds) >= 5.0:
+                idx_5s = np.argmin(np.abs(time_seconds - 5.0))
+                if idx_5s < len(positions):
+                    ax.scatter(positions[idx_5s, 0], positions[idx_5s, 1], c='orange', s=80, marker='*', 
+                               edgecolors='black', linewidths=2, label='t=5s', zorder=6)
         
         # # Add ego agent ID
         # if show_agent_ids and len(positions) > 0:
@@ -986,6 +995,11 @@ def create_velocity_plots(analysis_data: Dict, figure_size: Tuple[int, int] = (1
     # Plot 1: Velocity over time
     ax1.plot(time_seconds, velocities, 'b-', linewidth=2.5, label='Velocity', alpha=0.8)
     ax1.fill_between(time_seconds, velocities, alpha=0.3, color='blue')
+    
+    # Add vertical line at t=5s
+    if len(time_seconds) > 0 and np.max(time_seconds) >= 5.0:
+        ax1.axvline(x=5.0, color='red', linestyle='--', linewidth=2.5, alpha=0.8, label='t=5s')
+    
     ax1.set_xlabel('Time (seconds)')
     ax1.set_ylabel('Velocity (m/s)')
     ax1.set_title(f'Ego Agent Velocity Profile - Scenario: {metadata["scenario_id"]}', 
@@ -1016,6 +1030,15 @@ def create_velocity_plots(analysis_data: Dict, figure_size: Tuple[int, int] = (1
                edgecolors='black', linewidths=2, label='Start', zorder=5)
     ax2.scatter(positions[-1, 0], positions[-1, 1], c='red', s=100, marker='^', 
                edgecolors='black', linewidths=2, label='End', zorder=5)
+    
+    # Mark position at t=5s
+    if len(time_seconds) > 0 and np.max(time_seconds) >= 5.0:
+        # Find the index closest to 5s
+        idx_5s = np.argmin(np.abs(time_seconds - 5.0))
+        if idx_5s < len(positions):
+            ax2.scatter(positions[idx_5s, 0], positions[idx_5s, 1], c='red', s=150, marker='*', 
+                       edgecolors='black', linewidths=2, label='t=5s', zorder=6)
+    
     ax2.set_xlabel('X Position (meters)')
     ax2.set_ylabel('Y Position (meters)')
     ax2.set_title('Ego Agent Trajectory Path', fontweight='bold', fontsize=12)
@@ -1034,6 +1057,11 @@ def create_velocity_plots(analysis_data: Dict, figure_size: Tuple[int, int] = (1
         ax3.plot(time_seconds, accelerations, 'r-', linewidth=2.5, label='Acceleration', alpha=0.8)
         ax3.fill_between(time_seconds, accelerations, alpha=0.3, color='red')
         ax3.axhline(y=0, color='black', linestyle='-', alpha=0.5)  # Zero acceleration line
+        
+        # Add vertical line at t=5s
+        if len(time_seconds) > 0 and np.max(time_seconds) >= 5.0:
+            ax3.axvline(x=5.0, color='red', linestyle='--', linewidth=2.5, alpha=0.8, label='t=5s')
+        
         ax3.set_xlabel('Time (seconds)')
         ax3.set_ylabel('Acceleration (m/s²)')
         ax3.set_title('Ego Agent Acceleration Profile', fontweight='bold', fontsize=12)
@@ -1123,10 +1151,16 @@ def create_integrated_ego_analysis(data_loader: DataLoader,
         # Velocity plot
         ax_velocity.plot(time_seconds, velocities, 'b-', linewidth=2, alpha=0.8)
         ax_velocity.fill_between(time_seconds, velocities, alpha=0.3, color='blue')
+        
+        # Add vertical line at t=5s
+        if len(time_seconds) > 0 and np.max(time_seconds) >= 5.0:
+            ax_velocity.axvline(x=5.0, color='red', linestyle='--', linewidth=2, alpha=0.8, label='t=5s')
+        
         ax_velocity.set_xlabel('Time (s)', fontsize=10)
         ax_velocity.set_ylabel('Velocity (m/s)', fontsize=10)
         ax_velocity.set_title('Ego Velocity Profile', fontweight='bold', fontsize=11)
         ax_velocity.grid(True, alpha=0.3)
+        ax_velocity.legend(fontsize=9)
         
         # Add velocity statistics
         velocity_stats = velocity_data['velocity_stats']
@@ -1144,6 +1178,13 @@ def create_integrated_ego_analysis(data_loader: DataLoader,
                        edgecolors='black', linewidths=2, label='Start', zorder=5)
         ax_path.scatter(positions[-1, 0], positions[-1, 1], c='red', s=60, marker='^', 
                        edgecolors='black', linewidths=2, label='End', zorder=5)
+        
+        # Mark position at t=5s
+        if len(time_seconds) > 0 and np.max(time_seconds) >= 5.0:
+            idx_5s = np.argmin(np.abs(time_seconds - 5.0))
+            if idx_5s < len(positions):
+                ax_path.scatter(positions[idx_5s, 0], positions[idx_5s, 1], c='red', s=100, marker='*', 
+                               edgecolors='black', linewidths=2, label='t=5s', zorder=6)
         
         # Color trajectory by velocity
         if len(positions) > 1 and len(velocities) > 0:
@@ -1174,11 +1215,16 @@ def create_integrated_ego_analysis(data_loader: DataLoader,
             ax_accel.plot(time_seconds, accelerations, 'r-', linewidth=2, alpha=0.8)
             ax_accel.fill_between(time_seconds, accelerations, alpha=0.3, color='red')
             ax_accel.axhline(y=0, color='black', linestyle='-', alpha=0.5)
+            
+            # Add vertical line at t=5s
+            if len(time_seconds) > 0 and np.max(time_seconds) >= 5.0:
+                ax_accel.axvline(x=5.0, color='red', linestyle='--', linewidth=2, alpha=0.8, label='t=5s')
+            
             ax_accel.set_xlabel('Time (s)', fontsize=10)
             ax_accel.set_ylabel('Acceleration (m/s²)', fontsize=10)
             ax_accel.set_title('Ego Acceleration Profile', fontweight='bold', fontsize=11)
             ax_accel.grid(True, alpha=0.3)
-            ax_accel.legend()
+            ax_accel.legend(fontsize=9)
             
             # Add acceleration statistics
             acceleration_stats = velocity_data['acceleration_stats']
