@@ -163,12 +163,14 @@ class DataLoader:
     def __init__(self):
         self.current_data = None
         self.current_metadata = {}
+        self.current_file_path = None
     
     def load_scenario(self, file_path: Path) -> Dict:
         """Load a scenario from a .pt file."""
         try:
             data = torch.load(file_path, map_location='cpu')
             self.current_data = data
+            self.current_file_path = file_path  # Save the file path
             self._extract_metadata()
             print(f"Successfully loaded: {file_path.name}")
             return data
@@ -217,7 +219,9 @@ class DataLoader:
             'angles': valid_angles,
             'timesteps': valid_timesteps,
             'agent_id': data['agent_ids'][agent_idx] if 'agent_ids' in data else f"agent_{agent_idx}",
-            'agent_type': self._get_agent_type(agent_idx)
+            'agent_type': self._get_agent_type(agent_idx),
+            'agent_category': self._get_agent_category(agent_idx),
+            'agent_type_combined': self._get_agent_type_combined(agent_idx)
         }
     
     def _get_agent_type(self, agent_idx: int) -> str:
@@ -225,20 +229,88 @@ class DataLoader:
         if self.current_data is None or 'x_attr' not in self.current_data:
             return 'Unknown'
             
-        # x_attr typically contains [vehicle_type, length, width] or similar
+        # x_attr contains [object_type, object_category, object_type_combined]
+        # object_type mapping from OBJECT_TYPE_MAP in av2_data_utils.py
         attr = self.current_data['x_attr'][agent_idx].numpy()
         
-        # Simple mapping based on first attribute (customize based on your data)
+        # Complete mapping based on OBJECT_TYPE_MAP
+        OBJECT_TYPE_NAMES = {
+            0: 'Vehicle',
+            1: 'Pedestrian',
+            2: 'Motorcyclist',
+            3: 'Cyclist',
+            4: 'Bus',
+            5: 'Static',
+            6: 'Background',
+            7: 'Construction',
+            8: 'Riderless_Bicycle',
+            9: 'Unknown'
+        }
+        
         if len(attr) > 0:
-            if attr[0] == 0:
-                return 'Vehicle'
-            elif attr[0] == 1:
-                return 'Pedestrian'
-            elif attr[0] == 2:
-                return 'Cyclist'
-            else:
-                return f'Type_{int(attr[0])}'
+            object_type = int(attr[0])
+            return OBJECT_TYPE_NAMES.get(object_type, f'Type_{object_type}')
         return 'Unknown'
+    
+    def _get_agent_category(self, agent_idx: int) -> str:
+        """Get agent category (role in scenario) from attributes."""
+        if self.current_data is None or 'x_attr' not in self.current_data:
+            return 'Unknown'
+            
+        # x_attr contains [object_type, object_category, object_type_combined]
+        # object_category indicates the role of the agent in the scenario
+        attr = self.current_data['x_attr'][agent_idx].numpy()
+        
+        # Category mapping based on Argoverse 2 standards
+        OBJECT_CATEGORY_NAMES = {
+            0: 'Unscored',        # Regular unscored object
+            1: 'Scored_Track',    # Scored track
+            2: 'Scored_Agent',    # Scored agent (to be predicted)
+            3: 'Focal_Agent'      # Focal agent (AV/main vehicle)
+        }
+        
+        if len(attr) > 1:
+            category = int(attr[1])
+            return OBJECT_CATEGORY_NAMES.get(category, f'Category_{category}')
+        return 'Unknown'
+    
+    def _get_agent_type_combined(self, agent_idx: int) -> str:
+        """Get combined agent type from attributes."""
+        if self.current_data is None or 'x_attr' not in self.current_data:
+            return 'Unknown'
+            
+        # x_attr contains [object_type, object_category, object_type_combined]
+        # object_type_combined is a simplified grouping from OBJECT_TYPE_MAP_COMBINED
+        attr = self.current_data['x_attr'][agent_idx].numpy()
+        
+        # Combined type mapping based on OBJECT_TYPE_MAP_COMBINED in av2_data_utils.py
+        # Groups similar types together for simplified classification
+        COMBINED_TYPE_NAMES = {
+            0: 'Vehicle',         # Vehicle, Bus
+            1: 'Pedestrian',      # Pedestrian
+            2: 'Cyclist',         # Motorcyclist, Cyclist
+            3: 'Other'            # Static, Background, Construction, Riderless_Bicycle, Unknown
+        }
+        
+        if len(attr) > 2:
+            combined_type = int(attr[2])
+            return COMBINED_TYPE_NAMES.get(combined_type, f'Combined_{combined_type}')
+        return 'Unknown'
+    
+    def get_agent_attributes(self, agent_idx: int) -> Dict:
+        """Get all attributes for a specific agent."""
+        if self.current_data is None:
+            return None
+            
+        return {
+            'agent_idx': agent_idx,
+            'agent_id': self.current_data['agent_ids'][agent_idx] if 'agent_ids' in self.current_data else f"agent_{agent_idx}",
+            'object_type': self._get_agent_type(agent_idx),
+            'object_category': self._get_agent_category(agent_idx),
+            'object_type_combined': self._get_agent_type_combined(agent_idx),
+            'is_focal': agent_idx == self.current_data.get('focal_idx', -1),
+            'is_scored': agent_idx in self.current_data.get('scored_idx', [])
+        }
     
     def get_lane_data(self) -> Dict:
         """Get lane/map data."""
@@ -908,6 +980,8 @@ def plot_ego_velocity_analysis(data_loader: DataLoader,
     timesteps = ego_data['timesteps']
     velocities = ego_data['velocities']
     positions = ego_data['positions']
+    angles = ego_data['angles']
+    agent_type_combined = ego_data['agent_type_combined']
     
     # Convert timesteps to time in seconds (assuming 0.1s intervals)
     time_seconds = timesteps * 0.1
@@ -923,6 +997,7 @@ def plot_ego_velocity_analysis(data_loader: DataLoader,
         mask = (time_seconds >= start_time) & (time_seconds <= end_time)
         time_seconds = time_seconds[mask]
         velocities = velocities[mask]
+        angles = angles[mask]  # Filter angles as well
         if accelerations is not None:
             accelerations = accelerations[mask]
         timesteps = timesteps[mask]
@@ -947,6 +1022,16 @@ def plot_ego_velocity_analysis(data_loader: DataLoader,
             'std': np.std(accelerations)
         }
     
+    # Calculate angle statistics
+    angle_stats = {}
+    if len(angles) > 0:
+        angle_stats = {
+            'mean': np.mean(angles),
+            'max': np.max(angles),
+            'min': np.min(angles),
+            'std': np.std(angles)
+        }
+    
     # Calculate trajectory distance
     total_distance = 0.0
     if len(positions) > 1:
@@ -957,11 +1042,14 @@ def plot_ego_velocity_analysis(data_loader: DataLoader,
         'time_seconds': time_seconds,
         'velocities': velocities,
         'accelerations': accelerations,
+        'angles': angles,
         'positions': positions,
         'timesteps': timesteps,
         'velocity_stats': velocity_stats,
         'acceleration_stats': acceleration_stats,
+        'angle_stats': angle_stats,
         'total_distance': total_distance,
+        'agent_type_combined': agent_type_combined,
         'metadata': metadata
     }
 

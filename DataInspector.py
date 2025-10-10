@@ -193,6 +193,14 @@ class DetailedInspector:
                 distances = torch.sqrt((diffs**2).sum(dim=1))
                 total_distance = distances.sum().item()
                 print(f"  Trajectory length: {total_distance:.2f} m")
+        
+        # Focal agent attributes (EGO x_attr)
+        if 'x_attr' in self.data:
+            focal_attr = self.data['x_attr'][focal_idx]
+            print(f"  Attributes (x_attr):")
+            print(f"    object_type: {focal_attr[0].item()} ({self.OBJECT_TYPES.get(focal_attr[0].item(), 'unknown')})")
+            print(f"    object_category: {focal_attr[1].item()} ({self.OBJECT_CATEGORIES.get(focal_attr[1].item(), 'unknown')})")
+            print(f"    combined_type: {focal_attr[2].item()} ({self.COMBINED_TYPES.get(focal_attr[2].item(), 'unknown')})")
     
     def show_data_samples(self):
         """Show actual coordinate values"""
