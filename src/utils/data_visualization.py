@@ -338,6 +338,10 @@ class DataLoader:
         print("=== Data Summary ===")
         for key, value in self.current_metadata.items():
             print(f"{key}: {value}")
+        
+        focal_idx = self.current_metadata.get('focal_agent_idx', 0)
+        focal_combined_type = self._get_agent_type_combined(focal_idx)
+        print(f"ego_combined_type: {focal_combined_type}")
 
 
 class TrajectoryVisualizer:

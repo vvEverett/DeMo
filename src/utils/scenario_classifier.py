@@ -4,8 +4,6 @@ Scenario Classification Utilities for DeMo Data
 This module provides tools for classifying and organizing autonomous vehicle scenarios.
 """
 
-import shutil
-import json
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 from datetime import datetime
@@ -14,11 +12,11 @@ import pandas as pd
 
 class ScenarioClassifier:
     """
-    Manages scenario classification and file organization.
+    Manages scenario classification using CSV format.
     
     Features:
-    - Load/save classification records
-    - Classify scenarios and organize files
+    - Load/save classification records in CSV format
+    - Classify scenarios without moving files
     - Track statistics and query status
     - Browse and export results
     """
@@ -29,51 +27,48 @@ class ScenarioClassifier:
         Initialize the scenario classifier.
         
         Args:
-            output_base_path: Base directory for organized classified files
-            classification_log_path: Path to the JSON log file
+            output_base_path: Base directory for classification CSV file
+            classification_log_path: Path to the CSV log file (should end with .csv)
             expert_categories: Dictionary mapping expert IDs to category names
         """
         self.output_base_path = Path(output_base_path)
-        self.log_path = Path(classification_log_path)
+        # Change to CSV format
+        if classification_log_path.suffix == '.json':
+            self.csv_path = Path(str(classification_log_path).replace('.json', '.csv'))
+        else:
+            self.csv_path = Path(classification_log_path)
+        
         self.expert_categories = expert_categories
-        self.classifications = self._load_classifications()
-        self._ensure_directories()
+        self.classifications_df = self._load_classifications()
     
-    def _ensure_directories(self):
-        """Create necessary directories if they don't exist."""
-        self.output_base_path.mkdir(parents=True, exist_ok=True)
-        for expert_id, category_name in self.expert_categories.items():
-            category_dir = self.output_base_path / f"Expert_{expert_id}_{category_name}"
-            category_dir.mkdir(exist_ok=True)
-    
-    def _load_classifications(self) -> Dict:
-        """Load existing classifications from log file."""
-        if self.log_path.exists():
+    def _load_classifications(self) -> pd.DataFrame:
+        """Load existing classifications from CSV file."""
+        if self.csv_path.exists():
             try:
-                with open(self.log_path, 'r') as f:
-                    return json.load(f)
+                df = pd.read_csv(self.csv_path)
+                print(f"📂 Loaded {len(df)} existing classifications from {self.csv_path}")
+                return df
             except Exception as e:
                 print(f"Warning: Could not load classifications: {e}")
-        return {
-            "metadata": {"created": datetime.now().isoformat()}, 
-            "classifications": {}
-        }
+        
+        # Create empty DataFrame with minimal schema: [file_index, filename, expert_id]
+        return pd.DataFrame(columns=['file_index', 'filename', 'expert_id'])
     
     def _save_classifications(self):
-        """Save classifications to log file."""
-        self.classifications["metadata"]["last_updated"] = datetime.now().isoformat()
-        self.log_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(self.log_path, 'w') as f:
-            json.dump(self.classifications, f, indent=2)
+        """Save classifications to CSV file."""
+        self.csv_path.parent.mkdir(parents=True, exist_ok=True)
+        self.classifications_df.to_csv(self.csv_path, index=False)
+        print(f"💾 Saved classifications to {self.csv_path}")
     
-    def classify_scenario(self, file_path: Path, expert_id: int, notes: str = "") -> bool:
+    def classify_scenario(self, file_path: Path, expert_id: int, notes: str = "", file_index: int = None) -> bool:
         """
-        Classify a scenario and copy file to appropriate directory.
+        Classify a scenario by recording it in the CSV file (does not move files).
         
         Args:
             file_path: Path to the scenario file
             expert_id: Expert category ID
-            notes: Optional classification notes
+            notes: Optional classification notes (ignored in minimal CSV format)
+            file_index: Optional file index. If None, will be auto-assigned
         
         Returns:
             True if successful, False otherwise
@@ -82,24 +77,30 @@ class ScenarioClassifier:
             print(f"❌ Invalid expert ID: {expert_id}")
             return False
         
-        category_name = self.expert_categories[expert_id]
-        target_dir = self.output_base_path / f"Expert_{expert_id}_{category_name}"
-        target_file = target_dir / file_path.name
-        
         try:
-            shutil.copy2(file_path, target_file)
-            
-            self.classifications["classifications"][file_path.name] = {
-                "expert_id": expert_id,
-                "category": category_name,
-                "original_path": str(file_path),
-                "target_path": str(target_file),
-                "classified_at": datetime.now().isoformat(),
-                "notes": notes
-            }
+            # Check if file already classified
+            filename = file_path.name
+            if filename in self.classifications_df['filename'].values:
+                # Update existing classification
+                mask = self.classifications_df['filename'] == filename
+                self.classifications_df.loc[mask, 'expert_id'] = expert_id
+                print(f"🔄 Updated classification for {filename}")
+            else:
+                # Add new classification
+                # Use provided file_index or auto-assign
+                if file_index is None:
+                    file_index = len(self.classifications_df)
+                
+                new_row = pd.DataFrame([{
+                    'file_index': file_index,
+                    'filename': filename,
+                    'expert_id': expert_id
+                }])
+                self.classifications_df = pd.concat([self.classifications_df, new_row], 
+                                                     ignore_index=True)
+                print(f"✅ Classified {filename} as Expert {expert_id}")
             
             self._save_classifications()
-            print(f"✅ Classified {file_path.name} as Expert {expert_id} ({category_name})")
             return True
             
         except Exception as e:
@@ -108,11 +109,20 @@ class ScenarioClassifier:
     
     def is_classified(self, file_path: Path) -> bool:
         """Check if a file has been classified."""
-        return file_path.name in self.classifications["classifications"]
+        return file_path.name in self.classifications_df['filename'].values
     
     def get_classification_info(self, file_path: Path) -> Optional[Dict]:
         """Get classification information for a specific file."""
-        return self.classifications["classifications"].get(file_path.name)
+        filename = file_path.name
+        if filename not in self.classifications_df['filename'].values:
+            return None
+        
+        row = self.classifications_df[self.classifications_df['filename'] == filename].iloc[0]
+        return {
+            'file_index': int(row['file_index']),
+            'expert_id': int(row['expert_id']),
+            'category': self.expert_categories[int(row['expert_id'])]
+        }
     
     def get_unclassified_files(self, file_list: List[Path]) -> List[Path]:
         """Get list of unclassified files."""
@@ -121,12 +131,19 @@ class ScenarioClassifier:
     def get_classification_stats(self) -> Dict[int, int]:
         """Get classification statistics."""
         stats = {expert_id: 0 for expert_id in self.expert_categories.keys()}
-        total = 0
         
-        for info in self.classifications["classifications"].values():
-            stats[info["expert_id"]] += 1
-            total += 1
+        if len(self.classifications_df) == 0:
+            print("\n📊 Classification Statistics:")
+            print(f"Total: 0 scenarios")
+            return stats
         
+        # Count by expert_id
+        for expert_id in self.expert_categories.keys():
+            stats[expert_id] = len(self.classifications_df[
+                self.classifications_df['expert_id'] == expert_id
+            ])
+        
+        total = len(self.classifications_df)
         print("\n📊 Classification Statistics:")
         print(f"Total: {total} scenarios")
         for expert_id, count in stats.items():
@@ -145,21 +162,37 @@ class ScenarioClassifier:
         Returns:
             List of (filename, classification_info) tuples
         """
-        classified_files = [
-            (name, info) for name, info in self.classifications["classifications"].items()
-            if expert_id is None or info["expert_id"] == expert_id
-        ]
+        if len(self.classifications_df) == 0:
+            print("📁 No classified files yet.")
+            return []
+        
+        # Filter by expert_id if specified
+        if expert_id is not None:
+            filtered_df = self.classifications_df[
+                self.classifications_df['expert_id'] == expert_id
+            ]
+        else:
+            filtered_df = self.classifications_df
         
         title = (f"Expert {expert_id} ({self.expert_categories[expert_id]})" 
                 if expert_id else "All classified files")
         print(f"\n📁 {title}:")
         
-        for i, (name, info) in enumerate(classified_files, 1):
-            timestamp = info["classified_at"][:19]
-            notes = info["notes"] or "No notes"
-            print(f"  {i:2d}. {name}")
-            print(f"      Expert {info['expert_id']} ({info['category']}) | {timestamp}")
-            print(f"      Notes: {notes}")
+        classified_files = []
+        for i, (_, row) in enumerate(filtered_df.iterrows(), 1):
+            filename = row['filename']
+            file_index = int(row['file_index'])
+            expert_id_val = int(row['expert_id'])
+            category = self.expert_categories[expert_id_val]
+            
+            print(f"  {i:2d}. [{file_index:4d}] {filename} -> Expert {expert_id_val} ({category})")
+            
+            info_dict = {
+                'file_index': file_index,
+                'expert_id': expert_id_val,
+                'category': category
+            }
+            classified_files.append((filename, info_dict))
         
         return classified_files
     
@@ -173,29 +206,15 @@ class ScenarioClassifier:
         Returns:
             DataFrame with classification summary
         """
-        if not self.classifications["classifications"]:
+        if len(self.classifications_df) == 0:
             print("No classified scenarios to export.")
             return None
         
-        summary_data = [
-            {
-                'file_name': name,
-                'expert_id': info['expert_id'],
-                'category': info['category'],
-                'classified_at': info['classified_at'],
-                'notes': info['notes'],
-                'original_path': info['original_path'],
-                'target_path': info['target_path']
-            }
-            for name, info in self.classifications["classifications"].items()
-        ]
-        
-        df = pd.DataFrame(summary_data)
         output_path = output_path or (self.output_base_path / "classification_summary.csv")
-        df.to_csv(output_path, index=False)
+        self.classifications_df.to_csv(output_path, index=False)
         print(f"📊 Summary exported to: {output_path}")
-        print(f"Total: {len(summary_data)} scenarios")
-        return df
+        print(f"Total: {len(self.classifications_df)} scenarios")
+        return self.classifications_df.copy()
 
 
 def list_files_with_status(file_list: List[Path], 
@@ -246,7 +265,7 @@ def print_expert_categories(expert_categories: Dict[int, str]) -> None:
 
 
 def manual_classify_current(data_loader, classifier: ScenarioClassifier,
-                           expert_id: int, notes: str = "") -> bool:
+                           expert_id: int, notes: str = "", file_index: int = None) -> bool:
     """
     Manually classify the currently loaded scenario.
     
@@ -254,7 +273,8 @@ def manual_classify_current(data_loader, classifier: ScenarioClassifier,
         data_loader: DataLoader instance with current_file_path attribute
         classifier: ScenarioClassifier instance
         expert_id: Expert category ID (1-9)
-        notes: Optional notes about the classification
+        notes: Optional notes about the classification (ignored in minimal format)
+        file_index: Optional file index (will be auto-assigned if None)
         
     Returns:
         True if successful, False otherwise
@@ -264,4 +284,4 @@ def manual_classify_current(data_loader, classifier: ScenarioClassifier,
         return False
     
     print(f"🔄 Classifying: {data_loader.current_file_path.name}")
-    return classifier.classify_scenario(data_loader.current_file_path, expert_id, notes)
+    return classifier.classify_scenario(data_loader.current_file_path, expert_id, notes, file_index)
