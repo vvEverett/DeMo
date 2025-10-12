@@ -238,7 +238,7 @@ class ModelForecast(nn.Module):
             "y_hat": y_hat,  # trajectory output [B, M, T, 2]
             "pi": pi,  # mode probability output [B, M]
             "aux_loss": aux_loss,  # load balancing loss for MoE
-            "expert_weights": expert_weights,  # expert selection weights [B, num_experts]
+            "expert_weights": expert_weights,  # expert selection weights [B, M, num_experts] - per mode routing
 
             "y_hat_others": y_hat_others,  # trajectory of other agents
 

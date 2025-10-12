@@ -140,7 +140,7 @@ class Trainer(pl.LightningModule):
         pi = out["pi"]  # [B, M]
         y_hat_others = out["y_hat_others"]  # [B, N-1, T, 2]
         aux_loss = out["aux_loss"]  # scalar
-        expert_weights = out["expert_weights"]  # [B, num_experts]
+        expert_weights = out["expert_weights"]  # [B, M, num_experts] - each mode has its own expert routing
 
         # Ground truth
         y = data["target"][:, 0]  # [B, T, 2]
@@ -202,32 +202,36 @@ class Trainer(pl.LightningModule):
         """
         Compute diversity loss to encourage expert specialization.
         
-        We want different samples to use different experts, which encourages
+        We want different samples and modes to use different experts, which encourages
         experts to specialize in different driving behaviors.
         
         Args:
-            expert_weights: [B, num_experts] - expert selection probabilities
+            expert_weights: [B, M, num_experts] - expert selection probabilities for each mode
             
         Returns:
             diversity_loss: scalar tensor
         """
+        # Flatten to [B*M, num_experts] to treat each (batch, mode) pair as independent sample
+        B, M, num_experts = expert_weights.shape
+        expert_weights_flat = expert_weights.view(B * M, num_experts)  # [B*M, num_experts]
+        
         # Compute pairwise cosine similarity between expert weight distributions
         # High similarity means experts are being used similarly (bad)
         # Low similarity means experts are specialized (good)
         
-        # Normalize expert weights
-        expert_weights_norm = F.normalize(expert_weights, p=2, dim=1)  # [B, num_experts]
+        # Normalize expert weights along expert dimension
+        expert_weights_norm = F.normalize(expert_weights_flat, p=2, dim=1)  # [B*M, num_experts]
         
-        # Compute cosine similarity matrix [B, B]
+        # Compute cosine similarity matrix [B*M, B*M]
         similarity_matrix = torch.mm(expert_weights_norm, expert_weights_norm.t())
         
         # We want low similarity (encourage diversity)
         # Remove diagonal (self-similarity is always 1)
-        B = expert_weights.size(0)
-        mask = ~torch.eye(B, dtype=torch.bool, device=expert_weights.device)
+        total_samples = B * M
+        mask = ~torch.eye(total_samples, dtype=torch.bool, device=expert_weights.device)
         off_diagonal_sim = similarity_matrix[mask]
         
-        # Penalize high similarity
+        # Penalize high similarity - want different samples/modes to use different experts
         diversity_loss = off_diagonal_sim.mean()
         
         return diversity_loss
@@ -237,18 +241,24 @@ class Trainer(pl.LightningModule):
         Compute statistics about expert utilization for logging.
         
         Args:
-            expert_weights: [B, num_experts]
+            expert_weights: [B, M, num_experts] - expert selection probabilities for each mode
             
         Returns:
             dict with statistics
         """
         with torch.no_grad():
-            # Average usage per expert across batch
-            avg_usage = expert_weights.mean(dim=0)  # [num_experts]
+            # Flatten to [B*M, num_experts] to compute overall expert usage
+            B, M, num_experts = expert_weights.shape
+            expert_weights_flat = expert_weights.view(B * M, num_experts)
+            
+            # Average usage per expert across all samples and modes
+            avg_usage = expert_weights_flat.mean(dim=0)  # [num_experts]
             
             # Find most and least used experts
             max_usage = avg_usage.max().item()
             min_usage = avg_usage.min().item()
+            max_expert_idx = avg_usage.argmax().item()
+            min_expert_idx = avg_usage.argmin().item()
             
             # Standard deviation of usage (measure of imbalance)
             usage_std = avg_usage.std().item()
@@ -262,6 +272,8 @@ class Trainer(pl.LightningModule):
                 'expert_min_usage': min_usage,
                 'expert_usage_std': usage_std,
                 'expert_entropy': entropy,
+                'most_used_expert': max_expert_idx,
+                'least_used_expert': min_expert_idx,
             }
             
             # Individual expert usage

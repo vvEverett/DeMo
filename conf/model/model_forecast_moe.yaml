@@ -18,5 +18,5 @@ target:
   weight_decay: ${weight_decay}
   epochs: ${epochs}
   warmup_epochs: ${warmup_epochs}
-  aux_loss_weight: 0.01  # Weight for load balancing loss
-  diversity_loss_weight: 0.1  # Weight for expert diversity loss
+  aux_loss_weight: ${aux_loss_weight}  # Weight for load balancing loss
+  diversity_loss_weight: ${diversity_loss_weight}  # Weight for expert diversity loss
