@@ -1,0 +1,26 @@
+name: model_forecast_moe_supervised
+phase: default
+
+target:
+  _target_: src.model.trainer_forecast_moe_supervised.Trainer
+
+  pretrained_weights: ${pretrained_weights}
+  lr: ${lr}
+  warmup_epochs: ${warmup_epochs}
+  epochs: ${epochs}
+  weight_decay: ${weight_decay}
+  router_loss_weight: ${router_loss_weight}  # Supervised router loss weight
+  aux_loss_weight: ${aux_loss_weight}  # Load balancing loss weight
+
+  model:
+    type: ModelForecast
+    embed_dim: 128
+    num_heads: 8
+    mlp_ratio: 4.0
+    qkv_bias: false
+    drop_path: 0.2
+    future_steps: 60
+    num_unshared_experts: 5  # 5 unshared experts (Lane Keeping, Turn Left, Turn Right, Deceleration, Others)
+    top_k: 2  # Top-2 expert activation
+    shared_weight: 0.3  # 30% shared expert, 70% unshared experts
+    load_balance_weight: 0.1  # Load balancing weight inside predictor

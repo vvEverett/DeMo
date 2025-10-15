@@ -1,0 +1,44 @@
+defaults:
+  - datamodule: av2
+  - model: model_forecast_moe_supervised  # Use Supervised MoE predictor
+
+hydra:
+  run:
+    dir: outputs/${output}/${now:%Y%m%d-%H%M%S}
+
+seed: 2024
+monitor: val_minFDE6
+save_top_k: 10
+
+# Weights & Biases configuration
+wandb_project: DeMo  # Your W&B project name
+wandb_run_name:  # Optional: custom run name (auto-generated if not set)
+
+data_root:
+checkpoint:  # Leave empty for training from scratch
+pretrained_weights:  # Path to baseline checkpoint to initialize encoder
+output: train_supervised_moe_${datamodule.name}_${datamodule.phase}_${model.name}_${model.phase}
+
+# trainer
+num_workers: 4
+gpus: 6  # Use 6 GPUs for training
+sync_bn: true
+batch_size: 16
+epochs: 60
+warmup_epochs: 10
+
+# optimizer
+lr: 0.00225  # Learning rate scaled for 6 GPUs
+weight_decay: 1e-2  
+gradient_clip_val: 5
+gradient_clip_algorithm: norm
+
+# Supervised MoE hyperparameters
+router_loss_weight: 1.0  # Weight for router supervision loss (soft, per-mode)
+aux_loss_weight: 0.05  # Weight for load balancing auxiliary loss
+
+limit_train_batches:
+limit_val_batches:
+limit_test_batches:
+log_model: all
+test: false
