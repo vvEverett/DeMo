@@ -44,6 +44,7 @@ class Trainer(pl.LightningModule):
         weight_decay: float = 1e-4,
         router_loss_weight: float = 1.0,
         aux_loss_weight: float = 0.01,
+        expert_loss_weight: float = 1.0,  # NEW: Weight for expert-specific supervision
     ) -> None:
         """
         Initialize the Supervised MoE trainer.
@@ -57,6 +58,7 @@ class Trainer(pl.LightningModule):
             weight_decay: Weight decay coefficient for regularization
             router_loss_weight: Weight for router supervision loss
             aux_loss_weight: Weight for load balancing auxiliary loss
+            expert_loss_weight: Weight for expert-specific supervision loss (CRITICAL!)
         """
         super(Trainer, self).__init__()
         self.warmup_epochs = warmup_epochs
@@ -65,6 +67,7 @@ class Trainer(pl.LightningModule):
         self.weight_decay = weight_decay
         self.router_loss_weight = router_loss_weight
         self.aux_loss_weight = aux_loss_weight
+        self.expert_loss_weight = expert_loss_weight  # NEW
         self.save_hyperparameters()
         self.submission_handler = SubmissionAv2()
 
@@ -141,6 +144,7 @@ class Trainer(pl.LightningModule):
         - Loss for other agents in the scene
         - Router supervision loss (uses ground truth expert labels, soft supervision per-mode)
         - Load balancing auxiliary loss (encourages uniform expert utilization)
+        - Expert-specific supervision loss (CRITICAL: direct gradient to each expert on its samples)
 
         Args:
             out: Model outputs containing predictions and routing information
@@ -157,6 +161,7 @@ class Trainer(pl.LightningModule):
         selected_experts = out["selected_experts"]  # [B, M, top_k]
         expert_labels = out["expert_labels"]  # [B] - ground truth expert IDs (1-5)
         aux_loss = out["aux_loss"]  # Load balancing loss
+        expert_predictions = out["expert_predictions"]  # Dict[expert_idx -> (traj, score)]
 
         # Ground truth
         y = data["target"][:, 0]  # [B, T, 2]
@@ -221,6 +226,51 @@ class Trainer(pl.LightningModule):
                 diversity_loss = -entropy * 0.01  # Small weight for diversity
                 router_loss = router_loss + diversity_loss
 
+        # ============ Expert-specific supervision loss (CRITICAL!) ============
+        # This is the key to making experts learn their specializations!
+        # For each sample, we compute loss between the ground truth expert's prediction and GT trajectory
+        expert_specific_loss = torch.tensor(0.0, device=y_hat.device)
+        if expert_labels is not None and expert_predictions is not None:
+            # Convert expert labels from 1-5 to 0-4
+            expert_targets = (expert_labels - 1).long()  # [B]
+            
+            # For each sample in the batch, get its assigned expert's prediction
+            B = y.shape[0]
+            
+            # Stack all expert predictions: [num_experts, B, M, T, 2]
+            all_expert_trajs = torch.stack([expert_predictions[i][0] for i in range(5)], dim=0)
+            
+            # For each sample, select the trajectory from its assigned expert
+            # expert_targets: [B] - which expert (0-4) is responsible for each sample
+            # We want to get: assigned_expert_traj[b] = all_expert_trajs[expert_targets[b], b]
+            
+            # Method: Use advanced indexing
+            # For each batch index b, we want all_expert_trajs[expert_targets[b], b, :, :, :]
+            batch_indices = torch.arange(B, device=y.device)
+            
+            # Get predictions from assigned experts for all modes: [B, M, T, 2]
+            assigned_expert_trajs = all_expert_trajs[expert_targets, batch_indices]  # [B, M, T, 2]
+            
+            # Find the best mode for each sample (same as before)
+            # This ensures we train the expert on the mode that best matches GT
+            l2_norm_expert = torch.norm(assigned_expert_trajs[..., :2] - y.unsqueeze(1), dim=-1).sum(dim=-1)  # [B, M]
+            best_mode_expert = torch.argmin(l2_norm_expert, dim=-1)  # [B]
+            
+            # Get the best mode's prediction from assigned expert
+            assigned_expert_best = assigned_expert_trajs[batch_indices, best_mode_expert]  # [B, T, 2]
+            
+            # Compute regression loss between assigned expert's prediction and ground truth
+            # This directly trains each expert on its assigned samples!
+            expert_specific_loss = F.smooth_l1_loss(assigned_expert_best, y)
+            expert_specific_loss = expert_specific_loss * self.expert_loss_weight
+            
+            # Optional: Also add classification loss for expert's score prediction
+            # This helps the expert learn to be confident on its assigned samples
+            all_expert_scores = torch.stack([expert_predictions[i][1] for i in range(5)], dim=0)  # [num_experts, B, M]
+            assigned_expert_scores = all_expert_scores[expert_targets, batch_indices]  # [B, M]
+            expert_cls_loss = F.cross_entropy(assigned_expert_scores, best_mode_expert.detach(), label_smoothing=0.2)
+            expert_specific_loss = expert_specific_loss + 0.1 * expert_cls_loss  # Small weight for score loss
+
         # ============ Load balancing auxiliary loss ============
         weighted_aux_loss = aux_loss * self.aux_loss_weight
 
@@ -230,7 +280,8 @@ class Trainer(pl.LightningModule):
             agent_cls_loss + 
             others_reg_loss + 
             router_loss +
-            weighted_aux_loss
+            weighted_aux_loss +
+            expert_specific_loss  # NEW: Direct expert supervision!
         )
 
         # ============ Loss dictionary for logging ============
@@ -241,6 +292,7 @@ class Trainer(pl.LightningModule):
             f"{tag}others_reg_loss": others_reg_loss.item(),
             f"{tag}router_loss": router_loss.item(),
             f"{tag}aux_loss": weighted_aux_loss.item(),
+            f"{tag}expert_loss": expert_specific_loss.item(),  # NEW
         }
         
         # Add expert utilization statistics (per-mode)
@@ -253,8 +305,6 @@ class Trainer(pl.LightningModule):
                             self.expert_usage_stats[expert_idx] += 1
                             self.mode_expert_stats[m][expert_idx] += 1
                 self.total_samples += selected_experts.shape[0] * selected_experts.shape[1] * selected_experts.shape[2]
-
-        return total_loss, disp_dict
 
         return total_loss, disp_dict
     

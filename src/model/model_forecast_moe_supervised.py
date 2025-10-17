@@ -240,7 +240,7 @@ class ModelForecast(nn.Module):
         y_hat_others = self.dense_predictor(x_others).view(B, x_others.size(1), -1, 2)
 
         # Supervised MoE decoder module (per-mode routing)
-        y_hat, pi, router_logits, selected_experts, expert_labels_out, aux_loss = self.time_decoder(
+        y_hat, pi, router_logits, selected_experts, expert_labels_out, aux_loss, expert_predictions = self.time_decoder(
             None, x_encoder, expert_labels=expert_labels, mask=~key_valid_mask
         )
 
@@ -251,6 +251,7 @@ class ModelForecast(nn.Module):
             "selected_experts": selected_experts,  # selected expert indices [B, M, top_k]
             "expert_labels": expert_labels_out,  # ground truth expert labels [B] (passed through)
             "aux_loss": aux_loss,  # load balancing loss
+            "expert_predictions": expert_predictions,  # Dict[expert_idx -> (traj, score)] for expert-specific supervision
 
             "y_hat_others": y_hat_others,  # trajectory of other agents
 

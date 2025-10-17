@@ -127,6 +127,7 @@ class SupervisedMoEPredictor(nn.Module):
             router_logits: [B, M, num_unshared_experts] for supervision
             selected_expert_indices: [B, M, top_k] selected unshared experts
             aux_loss: load balancing loss
+            expert_predictions: Dict[expert_idx -> (traj, score)] for expert-specific supervision
         """
         B, M, D = mode_features.shape
         assert M == self.num_modes, f"Expected {self.num_modes} modes, got {M}"
@@ -149,32 +150,75 @@ class SupervisedMoEPredictor(nn.Module):
         # ============ Get predictions from shared expert (30%) ============
         shared_traj, shared_score = self.shared_expert(mode_features)  # [B, M, T, 2], [B, M]
         
-        # ============ Get predictions from top-k unshared experts (70%) ============
+        # ============ Store individual expert predictions for expert-specific supervision ============
+        # We need to get predictions from ALL unshared experts (not just top-k)
+        # This allows us to compute expert-specific losses during training
+        expert_predictions = {}
+        
+        # Get predictions from all unshared experts
+        for expert_idx in range(self.num_unshared_experts):
+            expert = self.unshared_experts[expert_idx]
+            expert_traj, expert_score = expert(mode_features)  # [B, M, T, 2], [B, M]
+            expert_predictions[expert_idx] = (expert_traj, expert_score)
+        
+        # ============ Get predictions from top-k unshared experts (70%) - SPARSE ACTIVATION ============
+        # Strategy: Only compute selected top-k experts (sparse gating)
+        # Flatten and batch process to reduce number of expert forward calls
+        
+        # Flatten top_k_indices and top_k_probs: [B, M, top_k] -> [B*M*top_k]
+        top_k_indices_flat = top_k_indices.reshape(-1)  # [B*M*top_k]
+        top_k_probs_flat = top_k_probs.reshape(-1)  # [B*M*top_k]
+        
+        # Create a mapping: for each unique expert, collect all (batch, mode) pairs that use it
+        # This allows us to batch process inputs for each expert
         unshared_traj = torch.zeros(B, M, self._future_len, 2, device=mode_features.device)
         unshared_score = torch.zeros(B, M, device=mode_features.device)
         
-        # Aggregate predictions from top-k unshared experts for each mode independently
-        for i in range(B):
-            for m in range(M):
-                mode_traj = torch.zeros(self._future_len, 2, device=mode_features.device)
-                mode_score = torch.zeros(1, device=mode_features.device)
+        # Process each expert that has been selected by at least one (batch, mode) pair
+        unique_experts = torch.unique(top_k_indices_flat)
+        
+        for expert_idx in unique_experts:
+            # Find which (batch, mode, k) positions selected this expert
+            # Create indices in the original [B, M, top_k] space
+            mask = (top_k_indices == expert_idx)  # [B, M, top_k]
+            
+            # Get the positions where this expert is selected
+            batch_indices, mode_indices, k_indices = torch.where(mask)
+            
+            if len(batch_indices) == 0:
+                continue
                 
-                # Weighted combination of top-k experts for this specific mode
-                for k_idx in range(self.top_k):
-                    expert_idx = top_k_indices[i, m, k_idx]  # Which expert for this mode
-                    expert_weight = top_k_probs[i, m, k_idx]  # Weight for this expert
-                    
-                    # Get prediction from selected unshared expert for this specific mode
-                    expert = self.unshared_experts[expert_idx]
-                    # Pass single mode feature: [1, 1, D]
-                    expert_traj, expert_score = expert(mode_features[i:i+1, m:m+1])  # [1, 1, T, 2], [1, 1]
-                    
-                    # Weighted accumulation
-                    mode_traj += expert_weight * expert_traj.squeeze(0).squeeze(0)  # [T, 2]
-                    mode_score += expert_weight * expert_score.squeeze(0).squeeze(0)  # scalar
-                
-                unshared_traj[i, m] = mode_traj
-                unshared_score[i, m] = mode_score
+            # Gather the corresponding mode features for this expert
+            # mode_features[batch_indices, mode_indices] gives us all inputs for this expert
+            expert_input = mode_features[batch_indices, mode_indices].unsqueeze(1)  # [N, 1, D]
+            
+            # Forward through the selected expert (single forward call per expert)
+            expert = self.unshared_experts[expert_idx]
+            expert_traj, expert_score = expert(expert_input)  # [N, 1, T, 2], [N, 1]
+            expert_traj = expert_traj.squeeze(1)  # [N, T, 2]
+            expert_score = expert_score.squeeze(1)  # [N]
+            
+            # Get the corresponding weights
+            expert_weights = top_k_probs[batch_indices, mode_indices, k_indices]  # [N]
+            
+            # Accumulate weighted predictions back to the correct positions (vectorized)
+            # Weight the expert predictions
+            weighted_traj = expert_traj * expert_weights.unsqueeze(-1).unsqueeze(-1)  # [N, T, 2]
+            weighted_score = expert_score * expert_weights  # [N]
+            
+            # Use index_add_ for efficient in-place accumulation
+            # Convert 2D indices (batch, mode) to flat indices for unshared_traj and unshared_score
+            flat_indices = batch_indices * M + mode_indices  # [N]
+            
+            # Flatten unshared_traj to [B*M, T, 2] for index_add_
+            unshared_traj_flat = unshared_traj.view(B * M, self._future_len, 2)
+            unshared_traj_flat.index_add_(0, flat_indices, weighted_traj)
+            unshared_traj = unshared_traj_flat.view(B, M, self._future_len, 2)
+            
+            # Flatten unshared_score to [B*M] for index_add_
+            unshared_score_flat = unshared_score.view(B * M)
+            unshared_score_flat.index_add_(0, flat_indices, weighted_score)
+            unshared_score = unshared_score_flat.view(B, M)
         
         # ============ Final prediction: 30% shared + 70% unshared ============
         final_traj = self.shared_weight * shared_traj + self.unshared_weight * unshared_traj
@@ -183,7 +227,7 @@ class SupervisedMoEPredictor(nn.Module):
         # ============ Compute load balancing loss ============
         aux_loss = self._compute_load_balance_loss(router_probs)
         
-        return final_traj, final_score, router_logits, top_k_indices, aux_loss
+        return final_traj, final_score, router_logits, top_k_indices, aux_loss, expert_predictions
     
     def _compute_load_balance_loss(self, router_probs):
         """
@@ -270,6 +314,7 @@ class TimeDecoder(nn.Module):
             selected_experts: [B, M, top_k] selected unshared experts
             expert_labels: [B] ground truth expert labels (passed through)
             aux_loss: load balancing loss
+            expert_predictions: Dict[expert_idx -> (traj, score)] for expert-specific supervision
         """
         # Directional intention localization (Mode Localization Module)
         multi_modal_query = self.multi_modal_query_embedding(self.modal)  # [K, C] K=6
@@ -282,7 +327,7 @@ class TimeDecoder(nn.Module):
             mode = blk(mode)
 
         # Supervised MoE prediction (per-mode routing)
-        y_hat, pi, router_logits, selected_experts, aux_loss = self.predictor(mode, expert_labels)
+        y_hat, pi, router_logits, selected_experts, aux_loss, expert_predictions = self.predictor(mode, expert_labels)
 
         # Return expert_labels for trainer to use
-        return y_hat, pi, router_logits, selected_experts, expert_labels, aux_loss
+        return y_hat, pi, router_logits, selected_experts, expert_labels, aux_loss, expert_predictions

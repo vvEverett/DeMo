@@ -11,6 +11,7 @@ target:
   weight_decay: ${weight_decay}
   router_loss_weight: ${router_loss_weight}  # Supervised router loss weight
   aux_loss_weight: ${aux_loss_weight}  # Load balancing loss weight
+  expert_loss_weight: ${expert_loss_weight}  # Expert-specific supervision loss weight (CRITICAL!)
 
   model:
     type: ModelForecast
