@@ -25,3 +25,4 @@ target:
     top_k: 2  # Top-2 expert activation
     shared_weight: 0.3  # 30% shared expert, 70% unshared experts
     load_balance_weight: 0.1  # Load balancing weight inside predictor
+    router_noise_std: 1.0  # Gumbel noise std for router regularization (prevents expert collapse)

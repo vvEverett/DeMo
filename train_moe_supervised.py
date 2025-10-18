@@ -145,6 +145,13 @@ def main(conf):
         print(f"Unshared experts parameters: {unshared_expert_params:,} ({unshared_expert_params // 5:,} per expert)")
         print(f"Router parameters: {router_params:,}")
         
+        print(f"\n--- Regularization Techniques ---")
+        print(f"Router Gumbel noise std: {model.net.time_decoder.predictor.router.noise_std:.2f}")
+        print(f"Load balancing weight: {model.net.time_decoder.predictor.load_balance_weight:.3f}")
+        print(f"Router loss weight: {conf.router_loss_weight:.2f}")
+        print(f"Auxiliary loss weight: {conf.aux_loss_weight:.3f}")
+        print(f"Expert-specific loss weight: {conf.expert_loss_weight:.2f}")
+        
         print(f"\n--- Expert Definitions ---")
         print(f"Expert 1: Lane Keeping (Straight/Lane Change)")
         print(f"Expert 2: Turn Left")

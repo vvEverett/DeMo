@@ -18,6 +18,7 @@ class ModelForecast(nn.Module):
     """
     DeMo Model with Mixture of Experts (MoE)
     Uses 6 specialized experts for diverse driving pattern prediction
+    Includes Gumbel noise regularization to prevent expert collapse
     """
     def __init__(
         self,
@@ -31,6 +32,7 @@ class ModelForecast(nn.Module):
         top_k: int = 2,
         shared_weight: float = 0.3,
         load_balance_weight: float = 0.01,
+        router_noise_std: float = 1.0,
     ) -> None:
         super().__init__()
 
@@ -84,14 +86,15 @@ class ModelForecast(nn.Module):
             nn.Linear(embed_dim, 256), nn.GELU(), nn.Linear(256, future_steps * 2)
         )
 
-        # MoE Time Decoder with supervised routing (per-mode)
+        # MoE Time Decoder with supervised routing (per-mode) and Gumbel noise regularization
         self.time_decoder = TimeDecoder(
             future_len=future_steps,
             dim=embed_dim,
             num_unshared_experts=num_unshared_experts,
             top_k=top_k,
             shared_weight=shared_weight,
-            load_balance_weight=load_balance_weight
+            load_balance_weight=load_balance_weight,
+            router_noise_std=router_noise_std  # Gumbel noise for exploration
         )
 
         self.initialize_weights()

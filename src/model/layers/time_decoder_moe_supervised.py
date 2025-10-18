@@ -48,10 +48,16 @@ class SupervisedRouter(nn.Module):
     Supervised MLP-based router for unshared expert selection
     Routes each mode independently to experts (like unsupervised MoE)
     Uses ground truth labels for supervision during training
+    
+    Regularization techniques:
+    - Gumbel noise: adds randomness during training to encourage exploration
+    - Prevents expert collapse by forcing the model to explore different experts
     """
-    def __init__(self, dim=128, num_unshared_experts=5):
+    def __init__(self, dim=128, num_unshared_experts=5, noise_std=1.0):
         super(SupervisedRouter, self).__init__()
         self.num_unshared_experts = num_unshared_experts
+        self.noise_std = noise_std  # Standard deviation of Gumbel noise
+        
         self.router = nn.Sequential(
             nn.Linear(dim, 256),
             nn.GELU(),
@@ -61,18 +67,49 @@ class SupervisedRouter(nn.Module):
             nn.Dropout(0.1),
             nn.Linear(128, num_unshared_experts)
         )
+    
+    def _add_gumbel_noise(self, logits):
+        """
+        Add Gumbel noise to logits during training for exploration.
+        Gumbel noise: -log(-log(U)) where U ~ Uniform(0,1)
+        
+        This is a common regularization technique in MoE that:
+        - Increases randomness in expert selection during training
+        - Encourages exploration of different experts
+        - Prevents premature convergence to a few experts (expert collapse)
+        
+        Args:
+            logits: [B*M, num_unshared_experts]
+        Returns:
+            noisy_logits: [B*M, num_unshared_experts]
+        """
+        if self.training and self.noise_std > 0:
+            # Sample from Gumbel(0, 1) distribution
+            uniform = torch.rand_like(logits)
+            gumbel_noise = -torch.log(-torch.log(uniform + 1e-10) + 1e-10)
+            # Scale by noise_std and add to logits
+            noisy_logits = logits + self.noise_std * gumbel_noise
+            return noisy_logits
+        else:
+            return logits
         
     def forward(self, context):
         """
         Args:
             context: [B*M, D] - context features from all modes (flattened)
         Returns:
-            router_logits: [B*M, num_unshared_experts] - expert selection logits
+            router_logits: [B*M, num_unshared_experts] - expert selection logits (with noise during training)
             router_probs: [B*M, num_unshared_experts] - expert selection probabilities
         """
         router_logits = self.router(context)  # [B*M, num_unshared_experts]
-        router_probs = F.softmax(router_logits, dim=-1)
-        return router_logits, router_probs
+        
+        # Add Gumbel noise during training for regularization
+        noisy_logits = self._add_gumbel_noise(router_logits)
+        
+        # Compute probabilities from noisy logits
+        router_probs = F.softmax(noisy_logits, dim=-1)
+        
+        return noisy_logits, router_probs
 
 
 class SupervisedMoEPredictor(nn.Module):
@@ -81,6 +118,7 @@ class SupervisedMoEPredictor(nn.Module):
     - 1 shared expert: trained on all data (30% weight)
     - 5 unshared experts: trained on specific data (70% weight, top-2 activation)
     - Supervised router: guided by ground truth expert labels, but routes each mode independently
+    - Gumbel noise regularization: prevents expert collapse during training
     
     Expert definitions:
     - Expert 1: Lane Keeping (Straight/Lane Change)
@@ -90,7 +128,7 @@ class SupervisedMoEPredictor(nn.Module):
     - Expert 5: Others (Long-tail behaviors)
     """
     def __init__(self, future_len=60, dim=128, num_modes=6, num_unshared_experts=5, 
-                 top_k=2, shared_weight=0.3, load_balance_weight=0.01):
+                 top_k=2, shared_weight=0.3, load_balance_weight=0.01, router_noise_std=1.0):
         super(SupervisedMoEPredictor, self).__init__()
         self._future_len = future_len
         self.num_modes = num_modes
@@ -114,7 +152,8 @@ class SupervisedMoEPredictor(nn.Module):
         ])
         
         # Supervised router for unshared expert selection (per-mode routing)
-        self.router = SupervisedRouter(dim, num_unshared_experts)
+        # with Gumbel noise regularization to prevent expert collapse
+        self.router = SupervisedRouter(dim, num_unshared_experts, noise_std=router_noise_std)
         
     def forward(self, mode_features, expert_labels=None):
         """
@@ -267,9 +306,10 @@ class TimeDecoder(nn.Module):
     Time Decoder with Supervised Mixture of Experts
     Uses 1 shared + 5 unshared experts with supervised routing
     Each mode independently routes to experts
+    Includes Gumbel noise regularization to prevent expert collapse
     """
     def __init__(self, future_len=60, dim=128, num_unshared_experts=5, top_k=2, 
-                 shared_weight=0.3, load_balance_weight=0.01):
+                 shared_weight=0.3, load_balance_weight=0.01, router_noise_std=1.0):
         super(TimeDecoder, self).__init__()
 
         ###### Mode Localization Module ######
@@ -289,7 +329,7 @@ class TimeDecoder(nn.Module):
         self.multi_modal_query_embedding = nn.Embedding(6, dim)
         self.register_buffer('modal', torch.arange(6).long())
 
-        # Supervised MoE Predictor (with per-mode routing)
+        # Supervised MoE Predictor (with per-mode routing and Gumbel noise)
         self.predictor = SupervisedMoEPredictor(
             future_len=future_len,
             dim=dim,
@@ -297,7 +337,8 @@ class TimeDecoder(nn.Module):
             num_unshared_experts=num_unshared_experts,
             top_k=top_k,
             shared_weight=shared_weight,
-            load_balance_weight=load_balance_weight
+            load_balance_weight=load_balance_weight,
+            router_noise_std=router_noise_std  # Gumbel noise for regularization
         )
 
     def forward(self, mode, encoding, expert_labels=None, mask=None):

@@ -35,8 +35,12 @@ gradient_clip_algorithm: norm
 
 # Supervised MoE hyperparameters
 router_loss_weight: 1.0      # Weight for router supervision loss
-aux_loss_weight: 0.00        # Weight for load balancing auxiliary loss
+aux_loss_weight: 0.01        # Weight for load balancing auxiliary loss
 expert_loss_weight: 1.0      # Weight for expert-specific supervision loss (CRITICAL for expert specialization!)
+
+# Router regularization (prevents expert collapse)
+# router_noise_std is passed through model config (see conf/model/model_forecast_moe_supervised.yaml)
+# Recommended values: 0.5 (light), 1.0 (default), 2.0 (strong)
 
 limit_train_batches:
 limit_val_batches:
