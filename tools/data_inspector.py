@@ -4,7 +4,7 @@ Inspect preprocessed .pt files from DeMo with detailed tensor information
 
 Usage:
     # Random selection
-    python DataInspector.py
+    python tools/data_inspector.py
 
     # Select by index
     # Modify FILE_INDEX in configuration section below
@@ -13,8 +13,15 @@ Usage:
     # Modify FILE_NAME in configuration section below
     # Example: FILE_NAME = 'scenario_0000b0f9-99f9-4a1f-a231-5be9e4c523f7'
 """
-import torch
 from pathlib import Path
+import sys
+
+import torch
+
+ROOT_DIR = Path(__file__).resolve().parents[1]
+if str(ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR))
+
 from src.utils.data_visualization import DataLoader, DataSelector
 
 # ============ Configuration ============

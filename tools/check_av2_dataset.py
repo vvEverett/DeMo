@@ -5,7 +5,7 @@ import time
 # Checking the original Argoverse 2 Motion Forecasting Dataset
 # This script counts the number of scenarios in each split (train, val, test)
 
-data_dir = Path("/home/shijie/nas/stu/xiaowei/data/av2")
+data_dir = Path("/data/av2")
 
 print("=== Checking original Argoverse 2 Motion Forecasting Dataset ===\n")
 

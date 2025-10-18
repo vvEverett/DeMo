@@ -202,8 +202,15 @@ class Trainer(pl.LightningModule):
         """
         Compute diversity loss to encourage expert specialization.
         
-        We want different samples and modes to use different experts, which encourages
-        experts to specialize in different driving behaviors.
+        REVISED OBJECTIVE: Instead of penalizing similarity between samples' expert choices,
+        we encourage different EXPERTS to have different activation patterns.
+        
+        This means:
+        - Expert A might specialize in left turns (activated by those samples)
+        - Expert B might specialize in right turns (activated by different samples)
+        - We penalize if Expert A and Expert B are activated by the same samples
+        
+        This is more aligned with the goal of expert specialization.
         
         Args:
             expert_weights: [B, M, num_experts] - expert selection probabilities for each mode
@@ -214,26 +221,31 @@ class Trainer(pl.LightningModule):
         # Flatten to [B*M, num_experts] to treat each (batch, mode) pair as independent sample
         B, M, num_experts = expert_weights.shape
         expert_weights_flat = expert_weights.view(B * M, num_experts)  # [B*M, num_experts]
-        
-        # Compute pairwise cosine similarity between expert weight distributions
-        # High similarity means experts are being used similarly (bad)
-        # Low similarity means experts are specialized (good)
-        
-        # Normalize expert weights along expert dimension
-        expert_weights_norm = F.normalize(expert_weights_flat, p=2, dim=1)  # [B*M, num_experts]
-        
-        # Compute cosine similarity matrix [B*M, B*M]
-        similarity_matrix = torch.mm(expert_weights_norm, expert_weights_norm.t())
-        
-        # We want low similarity (encourage diversity)
-        # Remove diagonal (self-similarity is always 1)
-        total_samples = B * M
-        mask = ~torch.eye(total_samples, dtype=torch.bool, device=expert_weights.device)
-        off_diagonal_sim = similarity_matrix[mask]
-        
-        # Penalize high similarity - want different samples/modes to use different experts
-        diversity_loss = off_diagonal_sim.mean()
-        
+
+        # Convert each expert's activation over samples into a probability distribution
+        # Adding epsilon avoids zero rows that would encourage experts to go completely dormant
+        eps = 1e-6
+        expert_activation_patterns = (expert_weights_flat.t() + eps)  # [num_experts, B*M]
+        expert_activation_patterns = expert_activation_patterns / expert_activation_patterns.sum(dim=1, keepdim=True)
+
+        # Measure overlap between experts via cosine similarity on their normalized activation distributions
+        expert_patterns_norm = F.normalize(expert_activation_patterns, p=2, dim=1)  # [num_experts, B*M]
+        expert_similarity_matrix = torch.mm(expert_patterns_norm, expert_patterns_norm.t())  # [num_experts, num_experts]
+
+        # Penalize overlap between different experts (off-diagonal terms)
+        mask = ~torch.eye(num_experts, dtype=torch.bool, device=expert_weights.device)
+        overlap_penalty = expert_similarity_matrix[mask].mean()
+
+        # Encourage every sample to keep meaningful entropy so that routing probabilities do not collapse
+        sample_entropy = -torch.sum(
+            expert_weights_flat * torch.log(expert_weights_flat + eps), dim=-1
+        ).mean()
+        max_entropy = torch.log(torch.tensor(float(num_experts), device=expert_weights.device))
+        entropy_gap = torch.clamp(max_entropy - sample_entropy, min=0.0)
+
+        # Total diversity regularizer: discourage expert overlap while penalizing low-entropy routing
+        diversity_loss = overlap_penalty + entropy_gap
+
         return diversity_loss
     
     def _compute_expert_statistics(self, expert_weights):

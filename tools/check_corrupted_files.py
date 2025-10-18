@@ -1,11 +1,11 @@
-import os
-import pickle  # Add this import
-import torch
-from pathlib import Path
-from tqdm import tqdm
 import argparse
+import os
+import pickle
+from pathlib import Path
 
-# Check for corrupted .pt files in a directory
+import torch
+from tqdm import tqdm
+
 
 def check_corrupted_files(data_dir, delete_corrupted=False, move_to_quarantine=False):
     """
@@ -87,6 +87,7 @@ def check_corrupted_files(data_dir, delete_corrupted=False, move_to_quarantine=F
     
     return len(corrupted_files)
 
+
 def main():
     parser = argparse.ArgumentParser(description='Detect corrupted PyTorch data files')
     parser.add_argument('--data_dir', '-d', type=str, 
@@ -118,6 +119,7 @@ def main():
         print(f"All dataset checks completed! Total corrupted files found: {total_corrupted}")
     else:
         check_corrupted_files(args.data_dir, args.delete, args.quarantine)
+
 
 if __name__ == "__main__":
     main()

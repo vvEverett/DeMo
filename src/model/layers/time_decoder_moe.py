@@ -105,9 +105,6 @@ class MoEPredictor(nn.Module):
         # Context-aware router
         self.router = MoERouter(dim, num_experts)
         
-        # Load balancing auxiliary loss weight
-        self.load_balance_weight = 0.01
-        
     def forward(self, mode_features):
         """
         Args:
@@ -148,33 +145,57 @@ class MoEPredictor(nn.Module):
         top_k_logits, top_k_indices = torch.topk(router_logits, self.top_k, dim=-1)  # [B, M, top_k]
         top_k_probs = F.softmax(top_k_logits, dim=-1)  # [B, M, top_k]
         
-        # Initialize outputs
-        trajectories = torch.zeros(B, M, self._future_len, 2, device=mode_features.device)
-        scores = torch.zeros(B, M, device=mode_features.device)
+        # ======== OPTIMIZED PARALLEL EXPERT COMPUTATION ========
+        # Instead of nested loops, we use batch operations for GPU parallelization
         
-        # Aggregate predictions from top-k experts for each mode
-        # Each mode independently combines predictions from its selected experts
-        for i in range(B):
-            for m in range(M):
-                mode_traj = torch.zeros(self._future_len, 2, device=mode_features.device)
-                mode_score = torch.zeros(1, device=mode_features.device)
-                
-                # Weighted combination of top-k experts for this specific mode
-                for k_idx in range(self.top_k):
-                    expert_idx = top_k_indices[i, m, k_idx]  # Which expert for this mode
-                    expert_weight = top_k_probs[i, m, k_idx]  # Weight for this expert
-                    
-                    # Get prediction from the selected expert for this specific mode
-                    expert = self.experts[expert_idx]
-                    # Pass single mode feature: [1, 1, D]
-                    expert_traj, expert_score = expert(mode_features[i:i+1, m:m+1])  # [1, 1, T, 2], [1, 1]
-                    
-                    # Weighted aggregation: combine expert predictions
-                    mode_traj += expert_weight * expert_traj.squeeze(0).squeeze(0)  # [T, 2]
-                    mode_score += expert_weight * expert_score.squeeze(0).squeeze(0)  # scalar
-                
-                trajectories[i, m] = mode_traj
-                scores[i, m] = mode_score
+        # Step 1: Get predictions from ALL experts for ALL mode features in parallel
+        # Expand mode_features_flat to [B*M, num_experts, D] by repeating
+        mode_features_expanded = mode_features_flat.unsqueeze(1).expand(
+            B * M, self.num_experts, D
+        )  # [B*M, num_experts, D]
+        
+        # Reshape to [B*M*num_experts, D] to batch process through experts
+        mode_features_for_experts = mode_features_expanded.reshape(B * M * self.num_experts, D)
+        
+        # Process all expert inputs in parallel
+        # We need to call each expert separately, but can batch within each expert
+        all_trajectories = []
+        all_scores = []
+        for expert_idx in range(self.num_experts):
+            # Extract features for this expert: every num_experts-th element
+            expert_features = mode_features_for_experts[expert_idx::self.num_experts]  # [B*M, D]
+            expert_features = expert_features.unsqueeze(1)  # [B*M, 1, D] for expert input format
+            
+            # Get predictions from this expert for all B*M samples
+            expert_traj, expert_score = self.experts[expert_idx](expert_features)  # [B*M, 1, T, 2], [B*M, 1]
+            all_trajectories.append(expert_traj.squeeze(1))  # [B*M, T, 2]
+            all_scores.append(expert_score.squeeze(1))  # [B*M]
+        
+        # Stack to get [B*M, num_experts, T, 2] and [B*M, num_experts]
+        all_expert_traj = torch.stack(all_trajectories, dim=1)  # [B*M, num_experts, T, 2]
+        all_expert_scores = torch.stack(all_scores, dim=1)  # [B*M, num_experts]
+        
+        # Reshape back to [B, M, num_experts, T, 2] and [B, M, num_experts]
+        all_expert_traj = all_expert_traj.view(B, M, self.num_experts, self._future_len, 2)
+        all_expert_scores = all_expert_scores.view(B, M, self.num_experts)
+        
+        # Step 2: Build sparse gating weights [B, M, num_experts]
+        sparse_weights = torch.zeros(B, M, self.num_experts, device=mode_features.device)
+        
+        # Fill in top-k weights using advanced indexing
+        batch_indices = torch.arange(B, device=mode_features.device).unsqueeze(1).unsqueeze(2)  # [B, 1, 1]
+        mode_indices = torch.arange(M, device=mode_features.device).unsqueeze(0).unsqueeze(2)  # [1, M, 1]
+        sparse_weights[batch_indices, mode_indices, top_k_indices] = top_k_probs  # [B, M, top_k]
+        
+        # Step 3: Weighted aggregation using tensor operations
+        # Expand sparse_weights for trajectory dimension: [B, M, num_experts, 1, 1]
+        weights_for_traj = sparse_weights.unsqueeze(-1).unsqueeze(-1)
+        
+        # Weighted sum of trajectories: [B, M, T, 2]
+        trajectories = (all_expert_traj * weights_for_traj).sum(dim=2)
+        
+        # Weighted sum of scores: [B, M]
+        scores = (all_expert_scores * sparse_weights).sum(dim=2)
         
         # Compute load balancing loss for training
         # Encourage uniform expert utilization across all modes and batches
@@ -190,7 +211,7 @@ class MoEPredictor(nn.Module):
         Args:
             router_probs: [B, M, num_experts] - routing probabilities for each mode
         Returns:
-            loss: scalar tensor
+            loss: scalar tensor (raw loss without weighting - weighting done in trainer)
         """
         # Compute average usage probability for each expert across all samples
         # Flatten to [B*M, num_experts] to treat all batch*mode samples equally
@@ -199,25 +220,12 @@ class MoEPredictor(nn.Module):
         router_probs_flat = router_probs.view(B * M, num_experts)
         avg_probs = router_probs_flat.mean(dim=0)  # [num_experts] - average usage per expert
         
-        # Compute entropy to encourage uniform distribution
-        # Higher entropy = more uniform utilization across experts
-        # We want all experts to be used roughly equally
-        eps = 1e-8
-        entropy = -(avg_probs * torch.log(avg_probs + eps)).sum()
+        # This is a widely used load balancing loss formulation for MoE
+        # It's the product of the number of experts and the sum of squares of the expert probabilities
+        # This encourages the expert probabilities to be close to uniform.
+        aux_loss = self.num_experts * torch.sum(avg_probs * avg_probs)
         
-        # We want to maximize entropy (uniform distribution)
-        # So we minimize negative entropy
-        load_balance_loss = -entropy * self.load_balance_weight
-        
-        # Alternative: L2 distance from uniform distribution
-        # Penalize deviation from equal expert usage (1/num_experts for each)
-        uniform_dist = torch.ones_like(avg_probs) / self.num_experts
-        l2_loss = F.mse_loss(avg_probs, uniform_dist)
-        
-        # Combine both losses for better load balancing
-        total_aux_loss = load_balance_loss + 0.01 * l2_loss
-        
-        return total_aux_loss
+        return aux_loss
     
     def get_expert_statistics(self, router_probs):
         """
