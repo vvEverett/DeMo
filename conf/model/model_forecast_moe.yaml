@@ -13,6 +13,7 @@ target:
     drop_path: 0.2
     num_experts: 6  # 6 specialized experts
     top_k: 2  # Top-2 expert activation
+    router_noise_std: 1.0  # Gumbel noise std for router regularization (prevents expert collapse)
   pretrained_weights: ${pretrained_weights}
   lr: ${lr}
   weight_decay: ${weight_decay}

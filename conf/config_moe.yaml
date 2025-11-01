@@ -36,8 +36,12 @@ gradient_clip_algorithm: norm
 # MoE-specific hyperparameters to prevent expert collapse
 # NOTE: These are the PRIMARY configuration values for training.
 # Adjust these values to control expert specialization behavior.
-aux_loss_weight: 1.0  # Increased from 0.01 for stronger load balancing
+aux_loss_weight: 0.1  # Increased from 0.01 for stronger load balancing
 diversity_loss_weight: 1.0  # Increased from 0.1 for better expert specialization
+
+# Router regularization (prevents expert collapse)
+# router_noise_std is passed through model config (see conf/model/model_forecast_moe.yaml)
+# Recommended values: 0.5 (light), 1.0 (default), 2.0 (strong)
 
 limit_train_batches:
 limit_val_batches:

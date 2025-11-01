@@ -54,10 +54,15 @@ class MoERouter(nn.Module):
     """
     MLP-based router for context-aware expert selection
     Uses context features to determine expert weights
+    
+    Regularization techniques:
+    - Gumbel noise: adds randomness during training to encourage exploration
+    - Prevents expert collapse by forcing the model to explore different experts
     """
-    def __init__(self, dim=128, num_experts=6):
+    def __init__(self, dim=128, num_experts=6, noise_std=1.0):
         super(MoERouter, self).__init__()
         self.num_experts = num_experts
+        self.noise_std = noise_std  # Standard deviation of Gumbel noise
         self.router = nn.Sequential(
             nn.Linear(dim, 256),
             nn.GELU(),
@@ -67,18 +72,49 @@ class MoERouter(nn.Module):
             nn.Dropout(0.1),
             nn.Linear(128, num_experts)
         )
+    
+    def _add_gumbel_noise(self, logits):
+        """
+        Add Gumbel noise to logits during training for exploration.
+        Gumbel noise: -log(-log(U)) where U ~ Uniform(0,1)
+        
+        This is a common regularization technique in MoE that:
+        - Increases randomness in expert selection during training
+        - Encourages exploration of different experts
+        - Prevents premature convergence to a few experts (expert collapse)
+        
+        Args:
+            logits: [B*M, num_experts]
+        Returns:
+            noisy_logits: [B*M, num_experts]
+        """
+        if self.training and self.noise_std > 0:
+            # Sample from Gumbel(0, 1) distribution
+            uniform = torch.rand_like(logits)
+            gumbel_noise = -torch.log(-torch.log(uniform + 1e-10) + 1e-10)
+            # Scale by noise_std and add to logits
+            noisy_logits = logits + self.noise_std * gumbel_noise
+            return noisy_logits
+        else:
+            return logits
         
     def forward(self, context):
         """
         Args:
             context: [B, D] - context features from encoder
         Returns:
-            router_logits: [B, num_experts] - expert selection logits
+            router_logits: [B, num_experts] - expert selection logits (with noise during training)
             router_probs: [B, num_experts] - expert selection probabilities
         """
         router_logits = self.router(context)  # [B, num_experts]
-        router_probs = F.softmax(router_logits, dim=-1)
-        return router_logits, router_probs
+        
+        # Add Gumbel noise during training for regularization
+        noisy_logits = self._add_gumbel_noise(router_logits)
+        
+        # Compute probabilities from noisy logits
+        router_probs = F.softmax(noisy_logits, dim=-1)
+        
+        return noisy_logits, router_probs
 
 
 class MoEPredictor(nn.Module):
@@ -88,8 +124,9 @@ class MoEPredictor(nn.Module):
     - Top-2 expert activation with sparse gating
     - MLP router for context-aware expert selection
     - Unsupervised learning of driving patterns
+    - Gumbel noise regularization: prevents expert collapse during training
     """
-    def __init__(self, future_len=60, dim=128, num_modes=6, num_experts=6, top_k=2):
+    def __init__(self, future_len=60, dim=128, num_modes=6, num_experts=6, top_k=2, router_noise_std=1.0):
         super(MoEPredictor, self).__init__()
         self._future_len = future_len
         self.num_modes = num_modes
@@ -102,8 +139,8 @@ class MoEPredictor(nn.Module):
             ExpertMLP(future_len, dim) for _ in range(num_experts)
         ])
         
-        # Context-aware router
-        self.router = MoERouter(dim, num_experts)
+        # Context-aware router with Gumbel noise regularization
+        self.router = MoERouter(dim, num_experts, noise_std=router_noise_std)
         
     def forward(self, mode_features):
         """
@@ -259,7 +296,7 @@ class TimeDecoder(nn.Module):
     Time Decoder with Mixture of Experts
     Replaces standard MLP predictor with MoE for learning diverse driving patterns
     """
-    def __init__(self, future_len=60, dim=128, num_experts=6, top_k=2):
+    def __init__(self, future_len=60, dim=128, num_experts=6, top_k=2, router_noise_std=1.0):
         super(TimeDecoder, self).__init__()
 
         ###### Mode Localization Module ######
@@ -279,13 +316,14 @@ class TimeDecoder(nn.Module):
         self.multi_modal_query_embedding = nn.Embedding(6, dim)
         self.register_buffer('modal', torch.arange(6).long())
 
-        # MoE Predictor instead of MLP
+        # MoE Predictor with Gumbel noise regularization
         self.predictor = MoEPredictor(
             future_len=future_len,
             dim=dim,
             num_modes=6,
             num_experts=num_experts,
-            top_k=top_k
+            top_k=top_k,
+            router_noise_std=router_noise_std
         )
 
     def forward(self, mode, encoding, mask=None):

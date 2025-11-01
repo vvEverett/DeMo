@@ -39,11 +39,13 @@ from src.model.trainer_forecast_moe_supervised import Trainer as MoETrainer
 
 # === Global configuration ====================================================
 # Update these defaults to match your environment when running without CLI args.
-PT_FILE_PATH = Path("/data1/xiaowei/code/DeMo/data/DeMo_processed/train/scenario_00052803-b0e6-4d8a-8abe-d8870d7c4132.pt")
+# Left: 000749d4-71b5-48ab-97b7-bcaa287da868
+# Pedestrian: 000b25a9-8f75-46eb-90f5-a75c985f6ae2 [30]
+PT_FILE_PATH = Path("data/DeMo_processed/train/scenario_000b25a9-8f75-46eb-90f5-a75c985f6ae2.pt")
 """Path to the processed AV2 `.pt` file you want to inspect."""
 
 CHECKPOINT_PATH: Optional[Path] = Path(
-    "/data1/xiaowei/code/DeMo/ckpts/SupervisedMoEv1/checkpoints/last.ckpt"
+    "ckpts/SupervisedMoEv3/checkpoints/last.ckpt"
 )
 """Lightning checkpoint containing trained supervised MoE weights (optional)."""
 
