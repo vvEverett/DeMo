@@ -38,3 +38,8 @@ limit_val_batches:
 limit_test_batches:
 log_model: all
 test: false  # false for val, true for test
+
+# wandb settings
+use_wandb: true  # set to true to enable wandb logging
+wandb_project: DeMo  # wandb project name
+wandb_run_name:  # optional: custom run name, leave empty for auto-generated name

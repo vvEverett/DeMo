@@ -10,7 +10,7 @@ from pytorch_lightning.callbacks import (
     RichModelSummary,
     RichProgressBar,
 )
-from pytorch_lightning.loggers import TensorBoardLogger
+from pytorch_lightning.loggers import TensorBoardLogger, WandbLogger
 
 
 @hydra.main(version_base=None, config_path="conf", config_name="config")
@@ -18,7 +18,19 @@ def main(conf):
     pl.seed_everything(conf.seed, workers=True)
     output_dir = HydraConfig.get().runtime.output_dir
 
-    logger = TensorBoardLogger(save_dir=output_dir, name="logs")
+    # Setup loggers
+    loggers = [TensorBoardLogger(save_dir=output_dir, name="logs")]
+    
+    # Add WandbLogger if enabled in config
+    if conf.get("use_wandb", False):
+        wandb_logger = WandbLogger(
+            project=conf.get("wandb_project", "DeMo"),
+            name=conf.get("wandb_run_name", None),
+            save_dir=output_dir,
+            log_model=conf.get("log_model", False),
+            config=dict(conf)
+        )
+        loggers.append(wandb_logger)
 
     callbacks = [
         ModelCheckpoint(
@@ -35,7 +47,7 @@ def main(conf):
     ]
 
     trainer = pl.Trainer(
-        logger=logger,
+        logger=loggers,
         gradient_clip_val=conf.gradient_clip_val,
         gradient_clip_algorithm=conf.gradient_clip_algorithm,
         max_epochs=conf.epochs,
