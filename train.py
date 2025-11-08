@@ -27,7 +27,7 @@ def main(conf):
             project=conf.get("wandb_project", "DeMo"),
             name=conf.get("wandb_run_name", None),
             save_dir=output_dir,
-            log_model=conf.get("log_model", False),
+            log_model=False,
             config=dict(conf)
         )
         loggers.append(wandb_logger)
