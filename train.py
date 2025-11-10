@@ -46,6 +46,9 @@ def main(conf):
         LearningRateMonitor(logging_interval="epoch"),
     ]
 
+    # Use auto strategy for single GPU or ddp_find_unused_parameters_true for multi-GPU
+    strategy = "auto" if conf.gpus == 1 else "ddp_find_unused_parameters_true"
+    
     trainer = pl.Trainer(
         logger=loggers,
         gradient_clip_val=conf.gradient_clip_val,
@@ -53,7 +56,7 @@ def main(conf):
         max_epochs=conf.epochs,
         accelerator="gpu",
         devices=conf.gpus,
-        strategy="ddp_find_unused_parameters_false",
+        strategy=strategy,
         callbacks=callbacks,
         limit_train_batches=conf.limit_train_batches,
         limit_val_batches=conf.limit_val_batches,
